@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: kozou
+          POSTGRES_PASSWORD: kozou
+          POSTGRES_DB: kozou
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kozou"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      KOZOU_TEST_DATABASE_URL: postgresql://kozou:kozou@127.0.0.1:5432/kozou
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Load contract fixture
+        run: psql "$KOZOU_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f fixtures/contract.sql
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test:unit
+      - run: pnpm test:contract
+      - run: pnpm build
+      - run: pnpm check:treeshake
+      - run: pnpm check:egress
+      - name: E2E (xvfb)
+        run: xvfb-run -a pnpm test:e2e
