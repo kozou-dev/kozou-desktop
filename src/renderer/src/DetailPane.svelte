@@ -1,26 +1,33 @@
 <script lang="ts">
   import type { ContextView } from '../../shared/contextView';
   import type { AiViews } from '../../shared/types';
-  import type { MapSelection } from './SemanticMap.svelte';
   import JsonTree from './JsonTree.svelte';
 
   let {
     context,
     aiViews,
     selected,
-  }: { context: ContextView; aiViews: AiViews; selected: MapSelection } = $props();
+  }: { context: ContextView; aiViews: AiViews; selected: string } = $props();
 
   type Tab = 'human' | 'ai' | 'raw';
   let tab = $state<Tab>('human');
 
-  const table = $derived(context.tables.find((t) => t.qualifiedName === selected.id) ?? null);
-  const view = $derived(context.views.find((v) => v.qualifiedName === selected.id) ?? null);
+  const table = $derived(context.tables.find((t) => t.qualifiedName === selected) ?? null);
+  const view = $derived(context.views.find((v) => v.qualifiedName === selected) ?? null);
   const entity = $derived(table ?? view);
+  // Ghost-ness is derived from the CURRENT context, never from a snapshot
+  // taken at click time: after a re-inspect (e.g. the user added the schema,
+  // exactly as this pane suggests) the same id may now be a real relation —
+  // a stale snapshot would keep asserting a false explanation.
+  const isGhost = $derived(
+    !entity &&
+      context.views.some((v) => v.underlyingTables.some((u) => `${u.schema}.${u.name}` === selected)),
+  );
   const concept = $derived(view ? (context.concepts.find((c) => c.name === view.name) ?? null) : null);
   const aiText = $derived.by(() => {
-    if (table) return aiViews.tables[selected.id] ?? null;
+    if (table) return aiViews.tables[selected] ?? null;
     if (view) {
-      const parts = [aiViews.views[selected.id]];
+      const parts = [aiViews.views[selected]];
       if (concept && aiViews.concepts[concept.name]) {
         parts.push(`// get_concept_context("${concept.name}")`, aiViews.concepts[concept.name]!);
       }
@@ -33,9 +40,9 @@
 </script>
 
 <aside class="detail" data-testid="detail-pane">
-  {#if selected.kind === 'ghost'}
+  {#if isGhost}
     <p class="empty">
-      <code>{selected.id}</code> is outside this profile's configured schemas - it appears because a
+      <code>{selected}</code> is outside this profile's configured schemas - it appears because a
       view reads from it. Add its schema to the profile to inspect it.
     </p>
   {:else if !entity}

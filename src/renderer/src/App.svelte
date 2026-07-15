@@ -5,17 +5,24 @@
   import EnumsPanel from './EnumsPanel.svelte';
   import FunctionsPanel from './FunctionsPanel.svelte';
   import OverviewCards from './OverviewCards.svelte';
-  import SemanticMap, { type MapSelection } from './SemanticMap.svelte';
+  import SemanticMap from './SemanticMap.svelte';
 
   const api = window.kozouDesktop;
 
   let profiles = $state<ProfileView[]>([]);
   let results = $state<Record<string, InspectResult>>({});
   let selectedProfile = $state<string | null>(null);
-  let selectedEntity = $state<MapSelection | null>(null);
+  let selectedEntity = $state<string | null>(null);
   let inspecting = $state<string | null>(null);
   let formError = $state<string | null>(null);
   let showAddForm = $state(false);
+  // A profile's identity is not its name across delete/re-create or a
+  // URL-changing re-save: bump a per-name token on every mutation and drop
+  // in-flight inspect results whose token no longer matches.
+  const profileTokens = new Map<string, number>();
+  const bumpToken = (name: string): void => {
+    profileTokens.set(name, (profileTokens.get(name) ?? 0) + 1);
+  };
 
   // Add-profile form
   let fName = $state('');
@@ -56,6 +63,10 @@
       fSchemas = 'public';
       fTimeout = '';
       showAddForm = false;
+      // The (re-)saved profile may point at a different database now — an
+      // in-flight inspect for the same name must not land.
+      bumpToken(name);
+      delete results[name];
       await inspect(name);
     } catch (err) {
       formError = message(err);
@@ -64,6 +75,7 @@
 
   async function remove(name: string): Promise<void> {
     try {
+      bumpToken(name);
       profiles = await api.deleteProfile(name);
     } catch (err) {
       formError = message(err);
@@ -87,6 +99,7 @@
     }
     selectedProfile = name;
     inspecting = name;
+    const token = profileTokens.get(name) ?? 0;
     let result: InspectResult;
     try {
       result = await api.inspect(name);
@@ -97,8 +110,9 @@
     } finally {
       inspecting = null;
     }
-    // The profile may have been deleted while the worker ran — a stale
-    // result for a (possibly different) database must not render.
+    // The profile may have been deleted or re-saved (possibly with another
+    // URL) while the worker ran — a stale result must not render.
+    if ((profileTokens.get(name) ?? 0) !== token) return;
     if (!profiles.some((p) => p.name === name)) return;
     results[name] = result;
   }
@@ -162,17 +176,23 @@
         <div class="split">
           <SemanticMap
             context={currentContext}
-            selected={selectedEntity?.id ?? null}
-            onselect={(selection) => (selectedEntity = selection)}
+            selected={selectedEntity}
+            onselect={(id) => (selectedEntity = id)}
           />
           {#if selectedEntity}
             <DetailPane context={currentContext} aiViews={current.aiViews} selected={selectedEntity} />
           {:else}
-            <aside class="placeholder">Click a relation on the map to see its compiled semantics - and exactly what your AI receives for it.</aside>
+            <aside class="placeholder">Click a relation on the map to see its compiled semantics - and what a default-configured kozou server hands your AI for it.</aside>
           {/if}
         </div>
         <FunctionsPanel functions={currentContext.functions ?? []} aiText={current.aiViews.functions} />
         <EnumsPanel enums={currentContext.enums} />
+      {:else}
+        <p class="empty-note">
+          {selectedProfile} is not inspected yet - use its card's inspect link{inspecting
+            ? ` (waiting: ${inspecting} is being inspected)`
+            : ''}.
+        </p>
       {/if}
     </section>
   {/if}
@@ -243,6 +263,10 @@
     margin: 0;
     color: #888;
     font-size: 0.75rem;
+  }
+  .empty-note {
+    color: #888;
+    margin: 0;
   }
   .stats {
     color: #555;

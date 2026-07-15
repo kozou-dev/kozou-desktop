@@ -50,10 +50,12 @@ export type InspectStats = {
   aiViewsBytes: number;
 };
 
-/** What the AI literally receives from the MCP describe tools: the same
- *  pure functions, serialized exactly as the MCP server does
- *  (JSON.stringify(payload, null, 2)). Keyed by qualified name (concepts by
- *  concept name; functions is the single describe_functions payload). */
+/** What the AI receives from the MCP describe tools of a default-configured
+ *  kozou server: the same pure functions, serialized through the server's own
+ *  `successResult` (constructive identity — see worker/aiViews.ts, including
+ *  the fidelity boundary for server-side opt-ins). Keyed by qualified name
+ *  (concepts by concept name; functions is the single describe_functions
+ *  payload). */
 export type AiViews = {
   tables: Record<string, string>;
   views: Record<string, string>;

@@ -22,6 +22,10 @@
     ondelete: (name: string) => void;
   } = $props();
 
+  // Inspections are serialized app-wide; while one runs, other cards'
+  // inspect links are visibly inert instead of silently doing nothing.
+  const busy = $derived(inspecting !== null);
+
   const pct = (x: number): string => `${Math.round(x * 100)}%`;
 </script>
 
@@ -58,13 +62,14 @@
       <div class="row actions">
         <span
           class="linkish"
+          class:disabled={busy && inspecting !== p.name}
           role="button"
           tabindex="0"
           onclick={(e) => {
             e.stopPropagation();
-            oninspect(p.name);
+            if (!busy) oninspect(p.name);
           }}
-          onkeydown={(e) => e.key === 'Enter' && (e.stopPropagation(), oninspect(p.name))}
+          onkeydown={(e) => e.key === 'Enter' && (e.stopPropagation(), !busy && oninspect(p.name))}
           >{inspecting === p.name ? 'inspecting...' : result ? 'refresh' : 'inspect'}</span
         >
         <span
@@ -146,5 +151,9 @@
   }
   .linkish.danger {
     color: #a00;
+  }
+  .linkish.disabled {
+    color: #aaa;
+    cursor: default;
   }
 </style>

@@ -1,9 +1,7 @@
 <script lang="ts">
   import type { ContextView } from '../../shared/contextView';
-  import { buildGraph, type NodeKind } from './lib/graph';
+  import { buildGraph } from './lib/graph';
   import { layoutGraph, type LayoutResult } from './lib/layout';
-
-  export type MapSelection = { id: string; kind: NodeKind };
 
   let {
     context,
@@ -12,7 +10,7 @@
   }: {
     context: ContextView;
     selected?: string | null;
-    onselect: (selection: MapSelection) => void;
+    onselect: (id: string) => void;
   } = $props();
 
   let layout = $state<LayoutResult | null>(null);
@@ -141,8 +139,8 @@
             tabindex="0"
             data-testid={`map-node-${node.id}`}
             onpointerdown={(e) => e.stopPropagation()}
-            onclick={() => onselect({ id: node.id, kind: node.kind })}
-            onkeydown={(e) => e.key === 'Enter' && onselect({ id: node.id, kind: node.kind })}
+            onclick={() => onselect(node.id)}
+            onkeydown={(e) => e.key === 'Enter' && onselect(node.id)}
           >
             <rect width={node.width} height={node.height} rx="8" />
             <text class="name" x="10" y="21">{node.name}</text>
