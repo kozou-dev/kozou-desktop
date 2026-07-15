@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // Static egress checklist (see EGRESS.md): our own source must not reference
-// network-capable Electron modules or perform renderer-side network calls.
-// Runtime verification (lsof while the app runs) is documented in EGRESS.md;
-// this script keeps regressions out of CI.
+// network-capable Node/Electron modules or perform renderer-side network
+// calls, and the production CSP must stay strict. Runtime verification (lsof
+// while the app runs) is documented in EGRESS.md; this script keeps
+// regressions out of CI.
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 const ROOT = new URL('..', import.meta.url).pathname;
@@ -18,12 +19,32 @@ const FORBIDDEN = new Map([
   ['XMLHttpRequest', 'no network calls from app code'],
   ['new WebSocket', 'no network calls from app code'],
   ['navigator.sendBeacon', 'telemetry beacon'],
+  ['session.fetch', "Electron's session-level fetch bypasses the renderer CSP"],
+  ['net.fetch', "Electron's net.fetch bypasses the renderer CSP"],
+  ['net.request', "Electron's net.request is network capability"],
+  ['shell.openExternal', 'no external navigation paths in M1 (reintroduce with an allowlist when docs links land)'],
 ]);
 
+// Network-capable module specifiers — matched as whole import/require
+// specifiers so both the `node:` prefix and the bare form are caught.
+const NETWORK_MODULES = ['http', 'https', 'http2', 'net', 'tls', 'dgram'];
+const NETWORK_MODULE_RE = new RegExp(
+  `(?:from\\s*|require\\s*\\(\\s*|import\\s*\\(\\s*)['"](?:node:)?(?:${NETWORK_MODULES.join('|')})['"]`,
+);
+
+// `import { net } from 'electron'` (ESM) or `const { net } = require('electron')`
+// (CJS) would not hit a simple token — catch both structurally.
+const ELECTRON_NET_IMPORT_RE =
+  /(?:import\s*(?:type\s*)?{[^}]*\bnet\b[^}]*}\s*from\s*['"]electron['"])|(?:{[^}]*\bnet\b[^}]*}\s*=\s*require\s*\(\s*['"]electron['"]\s*\))/;
+
 const SCAN_DIRS = ['src'];
-const EXTENSIONS = new Set(['.ts', '.svelte', '.html', '.css']);
+const EXTENSIONS = new Set(['.ts', '.svelte', '.html', '.css', '.js', '.mjs', '.cjs']);
 
 let failures = 0;
+const violation = (msg) => {
+  console.error(`EGRESS VIOLATION ${msg}`);
+  failures++;
+};
 
 function scan(dir) {
   for (const entry of readdirSync(dir)) {
@@ -35,27 +56,51 @@ function scan(dir) {
     if (![...EXTENSIONS].some((ext) => full.endsWith(ext))) continue;
     const text = readFileSync(full, 'utf8');
     for (const [token, why] of FORBIDDEN) {
-      if (text.includes(token)) {
-        console.error(`EGRESS VIOLATION ${full}: "${token}" (${why})`);
-        failures++;
-      }
+      if (text.includes(token)) violation(`${full}: "${token}" (${why})`);
+    }
+    if (NETWORK_MODULE_RE.test(text)) {
+      violation(`${full}: imports a network-capable module (http/https/http2/net/tls/dgram)`);
+    }
+    if (ELECTRON_NET_IMPORT_RE.test(text)) {
+      violation(`${full}: imports Electron's net module (network capability)`);
     }
   }
 }
 
 for (const dir of SCAN_DIRS) scan(join(ROOT, dir));
 
-// The renderer must declare a CSP.
+// The renderer must declare a CSP (dev HTML may allow localhost for HMR).
 const indexHtml = readFileSync(join(ROOT, 'src/renderer/index.html'), 'utf8');
 if (!indexHtml.includes('Content-Security-Policy')) {
-  console.error('EGRESS VIOLATION src/renderer/index.html: missing Content-Security-Policy meta');
-  failures++;
+  violation('src/renderer/index.html: missing Content-Security-Policy meta');
 }
+
+// The BUILT renderer CSP must be strict: default-src 'self' and no localhost
+// escape hatch (the dev-only HMR allowance must not ship).
+const builtIndex = join(ROOT, 'out/renderer/index.html');
+if (existsSync(builtIndex)) {
+  const built = readFileSync(builtIndex, 'utf8');
+  const csp = built.match(/Content-Security-Policy" content="([^"]*)"/)?.[1] ?? '';
+  if (!csp.includes("default-src 'self'")) {
+    violation("out/renderer/index.html: production CSP lacks default-src 'self'");
+  }
+  for (const banned of ['localhost', 'ws:', 'http://', '*']) {
+    if (csp.includes(banned)) {
+      violation(`out/renderer/index.html: production CSP contains "${banned}"`);
+    }
+  }
+} else if (process.env.CI) {
+  // In CI the build step precedes this check; a missing artifact means the
+  // pipeline was reordered and the production CSP silently went unverified.
+  violation('out/renderer/index.html missing in CI — run the build before check:egress');
+} else {
+  console.warn('note: out/renderer/index.html not found — run `pnpm build` first for the production CSP check');
+}
+
 // The main process must keep the spellchecker (dictionary auto-download) off.
 const mainSrc = readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8');
 if (!mainSrc.includes('setSpellCheckerEnabled(false)') || !mainSrc.includes('spellcheck: false')) {
-  console.error('EGRESS VIOLATION src/main/index.ts: spellchecker hardening missing');
-  failures++;
+  violation('src/main/index.ts: spellchecker hardening missing');
 }
 
 if (failures > 0) {

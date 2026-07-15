@@ -15,7 +15,7 @@ AI agents already see this model through kozou's MCP describe surface. Generic D
 
 - **Read-only by construction**: the app runs introspection only, inside a `READ ONLY` transaction; the write-capable kozou surfaces are not part of the app's production dependency tree (verified in CI: `scripts/check-treeshake.mjs`).
 - **Zero egress**: the only network peer is your own database. No telemetry, no crash upload, no update checks, spellchecker disabled (CI-checked: `scripts/check-egress-static.mjs`; see `EGRESS.md`).
-- **Secrets**: database passwords are stored via Electron `safeStorage` (OS keychain-backed), passed to introspection workers via environment only — never argv, logs, or config files.
+- **Secrets**: database passwords are stored via Electron `safeStorage` (OS keychain-backed), passed to introspection workers via environment only — never argv, logs, or config files. On Linux this additionally requires a real keyring backend: the `basic_text` fallback (a hardcoded key) is rejected rather than silently accepted.
 - **Least privilege**: connect with a minimal read role. On Supabase, do **not** use `service_role`/`postgres` (they bypass RLS).
 
 ## Development

@@ -4,7 +4,7 @@
 // password blob (Electron safeStorage) — never a plaintext password. The
 // encryptor is injected so unit tests can run without Electron.
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ProfileInput, ProfileView } from '../shared/types.js';
 import { joinDbUrl, splitDbUrl } from '../shared/url.js';
@@ -33,6 +33,37 @@ type StoreFile = { version: 1; profiles: StoredProfile[] };
 
 const PROFILE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
+/** Validate untrusted IPC input into a well-typed ProfileInput. All renderer
+ *  input crosses this before touching the store (a compromised renderer must
+ *  not be able to persist junk state). */
+export function validateProfileInput(input: unknown): ProfileInput {
+  if (typeof input !== 'object' || input === null) throw new Error('profile input must be an object');
+  const p = input as Record<string, unknown>;
+  if (typeof p.name !== 'string' || !PROFILE_NAME_RE.test(p.name)) {
+    throw new Error('profile name must be a string of 1-64 chars: letters, digits, ".", "_", "-"');
+  }
+  if (typeof p.url !== 'string') throw new Error('connection URL must be a string');
+  if (
+    !Array.isArray(p.schemas) ||
+    p.schemas.length === 0 ||
+    !p.schemas.every((s): s is string => typeof s === 'string' && s.length > 0)
+  ) {
+    throw new Error('schemas must be a non-empty array of non-empty strings');
+  }
+  if (p.timeoutMs !== undefined && (!Number.isInteger(p.timeoutMs) || (p.timeoutMs as number) <= 0)) {
+    // 0 would mean "no statement timeout" in PostgreSQL — never allow that here.
+    throw new Error('timeoutMs must be a positive integer');
+  }
+  return {
+    name: p.name,
+    ...(typeof p.label === 'string' && p.label !== '' ? { label: p.label } : {}),
+    ...(typeof p.color === 'string' && p.color !== '' ? { color: p.color } : {}),
+    url: p.url,
+    schemas: p.schemas,
+    ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs as number } : {}),
+  };
+}
+
 export class ProfileStore {
   private readonly file: string;
 
@@ -45,12 +76,19 @@ export class ProfileStore {
   }
 
   private read(): StoreFile {
+    if (!existsSync(this.file)) return { version: 1, profiles: [] };
     try {
       const parsed = JSON.parse(readFileSync(this.file, 'utf8')) as StoreFile;
       if (parsed && parsed.version === 1 && Array.isArray(parsed.profiles)) return parsed;
     } catch {
-      // Missing or corrupt file — start empty. Corruption loses only
-      // connection bookkeeping, never data.
+      // fall through to the corrupt path below
+    }
+    // Corrupt store: preserve it before starting empty — encrypted password
+    // blobs are not re-derivable, so the user may want to recover them.
+    try {
+      copyFileSync(this.file, `${this.file}.corrupt`);
+    } catch {
+      // If even the backup fails there is nothing more we can do safely.
     }
     return { version: 1, profiles: [] };
   }
@@ -73,13 +111,8 @@ export class ProfileStore {
     }));
   }
 
-  upsert(input: ProfileInput): ProfileView[] {
-    if (!PROFILE_NAME_RE.test(input.name)) {
-      throw new Error('profile name must be 1-64 chars: letters, digits, ".", "_", "-"');
-    }
-    if (input.schemas.length === 0) {
-      throw new Error('at least one schema is required');
-    }
+  upsert(rawInput: unknown): ProfileView[] {
+    const input = validateProfileInput(rawInput);
     const { sansPassword, password } = splitDbUrl(input.url);
     let encryptedPassword: string | undefined;
     if (password !== null) {
@@ -109,6 +142,7 @@ export class ProfileStore {
   }
 
   remove(name: string): ProfileView[] {
+    if (typeof name !== 'string') throw new Error('profile name must be a string');
     const data = this.read();
     data.profiles = data.profiles.filter((p) => p.name !== name);
     this.write(data);
@@ -118,6 +152,7 @@ export class ProfileStore {
   /** Rebuild the full connection URL (with password) for spawning a worker.
    *  Callers must keep it out of argv and logs. */
   connectionUrl(name: string): { url: string; schemas: string[]; timeoutMs?: number } {
+    if (typeof name !== 'string') throw new Error('profile name must be a string');
     const p = this.read().profiles.find((x) => x.name === name);
     if (!p) throw new Error(`unknown profile "${name}"`);
     const password = p.encryptedPassword !== undefined ? this.encryptor.decrypt(p.encryptedPassword) : null;

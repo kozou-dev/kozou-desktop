@@ -2,7 +2,9 @@
 // profile = one short-lived process; contexts for different databases are
 // never mixed in one process). The connection URL arrives via env only
 // (never argv, never in the IPC message); the reply is the trimmed
-// SchemaContext plus measurements. The process exits after a single request.
+// SchemaContext plus measurements. The worker serves a single request; the
+// parent terminates it after receiving the reply (no self-exit timer — a
+// timer would race the flush of a large reply).
 
 import processGlobal from 'node:process';
 import { trimContext } from '../shared/trim.js';
@@ -58,6 +60,6 @@ async function handle(req: WorkerRequest): Promise<void> {
   }
 
   parentPort.postMessage(result);
-  // Give the message a beat to flush, then exit — the worker is single-shot.
-  setTimeout(() => processGlobal.exit(0), 50);
+  // Do not exit here: the parent kills this process once the message arrives.
+  // Exiting on a timer would race the flush of a large reply.
 }

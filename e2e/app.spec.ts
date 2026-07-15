@@ -29,10 +29,14 @@ test('two profiles inspect end-to-end', async () => {
     await page.getByPlaceholder('postgresql://user:password@host:5432/db').fill(url!);
     await page.getByPlaceholder('schemas (comma-separated)').fill('public');
     await page.getByRole('button', { name: 'Save profile' }).click();
-    // Surface a save failure (e.g. secret storage unavailable) instead of a
-    // bare not-found timeout on the list item.
-    await expect(page.getByTestId('form-error')).toHaveCount(0);
-    await expect(page.locator('li', { hasText: name })).toBeVisible();
+    // Wait until the save settles either way, then surface a failure as its
+    // message instead of a bare not-found timeout on the list item. (A plain
+    // toHaveCount(0) on the error would race the async save.)
+    const item = page.locator('li', { hasText: name });
+    const err = page.getByTestId('form-error');
+    await expect(item.or(err).first()).toBeVisible();
+    await expect(err).toHaveCount(0);
+    await expect(item).toBeVisible();
   }
 
   for (const name of ['alpha', 'beta']) {
@@ -42,8 +46,11 @@ test('two profiles inspect end-to-end', async () => {
       .click();
     await expect(page.getByTestId('inspect-stats')).toBeVisible({ timeout: 60_000 });
     await expect(page.getByTestId('context-tree')).toContainText('SchemaContext');
-    // The fixture's semantic content actually made it to the UI.
-    await page.getByTestId('context-tree').getByText('SchemaContext').click();
+    // The fixture's semantic content actually made it to the UI — assert a
+    // table name and an @ai annotation from fixtures/contract.sql (textContent
+    // includes collapsed <details> children).
+    await expect(page.getByTestId('context-tree')).toContainText('customers');
+    await expect(page.getByTestId('context-tree')).toContainText('@ai');
   }
 
   await app.close();

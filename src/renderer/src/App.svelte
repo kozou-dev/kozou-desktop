@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { InspectResult, ProfileView } from '../../shared/types';
+  import { displayConnection } from '../../shared/url';
   import JsonTree from './JsonTree.svelte';
 
   const api = window.kozouDesktop;
@@ -10,6 +11,8 @@
   let inspecting = $state(false);
   let formError = $state<string | null>(null);
 
+  const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
   // Add-profile form
   let fName = $state('');
   let fUrl = $state('');
@@ -17,7 +20,11 @@
   let fTimeout = $state('');
 
   async function refresh(): Promise<void> {
-    profiles = await api.listProfiles();
+    try {
+      profiles = await api.listProfiles();
+    } catch (err) {
+      formError = message(err);
+    }
   }
 
   async function save(event: SubmitEvent): Promise<void> {
@@ -38,12 +45,17 @@
       fSchemas = 'public';
       fTimeout = '';
     } catch (err) {
-      formError = err instanceof Error ? err.message : String(err);
+      formError = message(err);
     }
   }
 
   async function remove(name: string): Promise<void> {
-    profiles = await api.deleteProfile(name);
+    try {
+      profiles = await api.deleteProfile(name);
+    } catch (err) {
+      formError = message(err);
+      return;
+    }
     if (selected === name) {
       selected = null;
       result = null;
@@ -56,6 +68,10 @@
     result = null;
     try {
       result = await api.inspect(name);
+    } catch (err) {
+      // An IPC rejection (e.g. the OS keychain refused to decrypt) must
+      // surface in the UI, not vanish as an unhandled rejection.
+      result = { ok: false, error: message(err) };
     } finally {
       inspecting = false;
     }
@@ -77,7 +93,9 @@
         <li class:active={selected === p.name}>
           <span class="dot" style:background={p.color ?? '#888'}></span>
           <strong>{p.name}</strong>
-          <code>{p.url}</code>
+          <!-- Compact host/db form: no scheme, no username — keeps
+               screenshots of this list low on identifiers. -->
+          <code>{displayConnection(p.url)}</code>
           <span class="schemas">[{p.schemas.join(', ')}]</span>
           <button onclick={() => inspect(p.name)} disabled={inspecting}>Inspect</button>
           <button class="danger" onclick={() => remove(p.name)}>Delete</button>

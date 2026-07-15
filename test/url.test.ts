@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { joinDbUrl, maskDbUrl, sanitizeErrorMessage, splitDbUrl } from '../src/shared/url.js';
+import { displayConnection, joinDbUrl, maskDbUrl, sanitizeErrorMessage, splitDbUrl } from '../src/shared/url.js';
 
 describe('splitDbUrl / joinDbUrl', () => {
   it('round-trips a URL with a password', () => {
@@ -29,6 +29,10 @@ describe('splitDbUrl / joinDbUrl', () => {
     expect(() => splitDbUrl('https://example.com')).toThrow(/unsupported protocol/);
     expect(() => splitDbUrl('not a url')).toThrow(/invalid connection URL/);
   });
+
+  it('gives an actionable error for a raw % in the password', () => {
+    expect(() => splitDbUrl('postgresql://app:100%pass@localhost:5432/db')).toThrow(/percent-escape/);
+  });
 });
 
 describe('maskDbUrl', () => {
@@ -36,6 +40,25 @@ describe('maskDbUrl', () => {
     const masked = maskDbUrl('postgresql://app:s3cr3t@localhost:5432/db');
     expect(masked).not.toContain('s3cr3t');
     expect(masked).toContain('•••');
+    expect(masked).toContain('app');
+    expect(masked).toContain('localhost:5432/db');
+  });
+
+  it('masks correctly even when the username itself contains asterisks', () => {
+    // Regression guard: a first-occurrence replace() would hit the username.
+    const masked = maskDbUrl('postgresql://a***b:s3cr3t@h:5432/db');
+    expect(masked).not.toContain('s3cr3t');
+    expect(masked).toContain('a***b:•••@');
+  });
+
+  it('leaves a password-less URL unchanged', () => {
+    expect(maskDbUrl('postgresql://app@h:5432/db')).toBe('postgresql://app@h:5432/db');
+  });
+});
+
+describe('displayConnection', () => {
+  it('shows host:port/db without scheme or username', () => {
+    expect(displayConnection('postgresql://app@db.example.com:5432/prod')).toBe('db.example.com:5432/prod');
   });
 });
 
@@ -46,5 +69,12 @@ describe('sanitizeErrorMessage', () => {
     const out = sanitizeErrorMessage(msg, url);
     expect(out).not.toContain('s3cr3t');
     expect(out).toContain('(connection URL)');
+  });
+
+  it('scrubs the percent-encoded password form too', () => {
+    const url = 'postgresql://app:p%40ss@localhost:5432/db';
+    const out = sanitizeErrorMessage('auth failed for token p%40ss (decoded p@ss)', url);
+    expect(out).not.toContain('p%40ss');
+    expect(out).not.toContain('p@ss');
   });
 });
