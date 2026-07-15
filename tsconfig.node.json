@@ -24,6 +24,7 @@
     "src/shared/**/*.ts",
     "src/renderer/src/lib/graph.ts",
     "src/renderer/src/lib/coverage.ts",
+    "src/renderer/src/lib/search.ts",
     "test/**/*.ts",
     "e2e/**/*.ts"
   ]
