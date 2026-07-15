@@ -19,6 +19,8 @@ export type ColumnView = {
   isForeignKey: boolean;
   label: string;
   description?: string | null;
+  aiDescription?: string | null;
+  enumValues?: string[] | null;
 };
 
 export type RowSecurityView = { enabled: boolean; forced: boolean; hasPolicies: boolean };

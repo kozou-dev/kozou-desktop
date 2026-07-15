@@ -54,6 +54,7 @@ async function handle(req: WorkerRequest): Promise<void> {
           buildMs: timings.buildMs,
           fullBytes: Buffer.byteLength(fullJson),
           trimmedBytes: Buffer.byteLength(trimmedJson),
+          aiViewsBytes: Buffer.byteLength(JSON.stringify(aiViews)),
         },
       };
     } catch (err) {

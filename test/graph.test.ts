@@ -110,6 +110,26 @@ describe('buildGraph', () => {
     expect(g.nodes[2]!.subtitle!.endsWith('...')).toBe(true);
   });
 
+  it('keeps edge ids unique for duplicate FK constraints (same columns, same target)', () => {
+    const relation = {
+      field: 'customer_id',
+      fields: ['customer_id'],
+      references: { schema: 'public', table: 'customers', column: 'id' },
+      cardinality: 'many-to-one',
+      meaning: null,
+    };
+    const g = buildGraph(
+      ctx({
+        tables: [
+          table({ name: 'orders', qualifiedName: 'public.orders', relations: [relation, { ...relation }] }),
+          table({ name: 'customers', qualifiedName: 'public.customers' }),
+        ],
+      }),
+    );
+    expect(g.edges).toHaveLength(2);
+    expect(new Set(g.edges.map((e) => e.id)).size).toBe(2);
+  });
+
   it('sets badges from @ai/@policy/rowSecurity', () => {
     const g = buildGraph(
       ctx({
@@ -127,7 +147,7 @@ describe('buildGraph', () => {
 });
 
 describe('computeCoverage', () => {
-  it('computes relation and column annotation fractions', () => {
+  it('computes relation and column annotation fractions (columns count @ai too)', () => {
     const cov = computeCoverage(
       ctx({
         tables: [
@@ -136,6 +156,7 @@ describe('computeCoverage', () => {
             columns: [
               { name: 'a', dataType: 't', nullable: true, isPrimaryKey: false, isForeignKey: false, label: 'a', description: 'yes' },
               { name: 'b', dataType: 't', nullable: true, isPrimaryKey: false, isForeignKey: false, label: 'b', description: null },
+              { name: 'c', dataType: 't', nullable: true, isPrimaryKey: false, isForeignKey: false, label: 'c', description: null, aiDescription: '@ai only' },
             ],
           }),
           table({ name: 'y', qualifiedName: 'public.y' }),
@@ -145,6 +166,6 @@ describe('computeCoverage', () => {
     );
     expect(cov.relationCount).toEqual({ tables: 2, views: 1, functions: 0 });
     expect(cov.relations).toBeCloseTo(2 / 3);
-    expect(cov.columns).toBeCloseTo(1 / 2);
+    expect(cov.columns).toBeCloseTo(2 / 3);
   });
 });

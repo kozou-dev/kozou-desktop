@@ -1,7 +1,9 @@
 <script lang="ts">
   import type { ContextView } from '../../shared/contextView';
-  import { buildGraph } from './lib/graph';
+  import { buildGraph, type NodeKind } from './lib/graph';
   import { layoutGraph, type LayoutResult } from './lib/layout';
+
+  export type MapSelection = { id: string; kind: NodeKind };
 
   let {
     context,
@@ -10,7 +12,7 @@
   }: {
     context: ContextView;
     selected?: string | null;
-    onselect: (id: string | null) => void;
+    onselect: (selection: MapSelection) => void;
   } = $props();
 
   let layout = $state<LayoutResult | null>(null);
@@ -26,6 +28,10 @@
   let lastY = 0;
   let containerWidth = $state(0);
   let containerHeight = $state(0);
+  // Fit once per layout, as soon as the container has been measured — the
+  // ResizeObserver behind bind:clientWidth reports after first paint, which
+  // can be later than the (synchronous-ish) elk layout resolution.
+  let fitted = $state(false);
 
   function fitToView(result: LayoutResult): void {
     if (containerWidth === 0 || containerHeight === 0) return;
@@ -37,7 +43,14 @@
     scale = Math.min(1, Math.max(0.2, fit));
     tx = margin;
     ty = margin;
+    fitted = true;
   }
+
+  $effect(() => {
+    if (!fitted && layout && containerWidth > 0 && containerHeight > 0) {
+      fitToView(layout);
+    }
+  });
 
   let layoutError = $state<string | null>(null);
 
@@ -52,6 +65,7 @@
         if (stale) return;
         layout = result;
         laying = false;
+        fitted = false;
         fitToView(result);
       })
       .catch((err: unknown) => {
@@ -127,8 +141,8 @@
             tabindex="0"
             data-testid={`map-node-${node.id}`}
             onpointerdown={(e) => e.stopPropagation()}
-            onclick={() => onselect(node.id)}
-            onkeydown={(e) => e.key === 'Enter' && onselect(node.id)}
+            onclick={() => onselect({ id: node.id, kind: node.kind })}
+            onkeydown={(e) => e.key === 'Enter' && onselect({ id: node.id, kind: node.kind })}
           >
             <rect width={node.width} height={node.height} rx="8" />
             <text class="name" x="10" y="21">{node.name}</text>

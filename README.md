@@ -11,7 +11,7 @@ AI agents already see this model through kozou's MCP describe surface. Generic D
 - **Is**: a local, read-only visual surface for compiled schema semantics, with named per-database profiles:
   - **Semantic map** — tables, views, FK relationships (with their documented meaning), view lineage, and `@ai`/`@policy`/RLS badges, laid out as a graph.
   - **Detail pane** — the full compiled semantics of a relation, including join suggestions and example queries.
-  - **AI view** — the exact payload an AI agent receives from the MCP describe tools for that relation: same functions, same serialization.
+  - **AI view** — the payload an AI agent receives from the MCP describe tools of a **default-configured** kozou server for that relation: same functions, same serialization. Server-side opt-ins (RPC exposure config, privilege-aware annotations) are not reproduced yet.
   - **Cross-database overview** — per-profile cards with relation counts and annotation coverage.
 - **Is not**: a chat client (bring your own — Claude Desktop, Cursor, etc. connect to kozou over MCP), a schema editor (schema and COMMENTs stay in SQL/Git), or a general DB client.
 

@@ -78,7 +78,9 @@ export function buildGraph(ctx: ContextView): SemanticGraph {
   }
 
   // FK edges: targets always exist in the context (out-of-scope FKs are
-  // pruned upstream), so these never dangle.
+  // pruned upstream), so these never dangle. Edge ids carry a running index:
+  // PostgreSQL allows several FK constraints over the same columns to the
+  // same target, and duplicate keys crash Svelte's keyed each in dev mode.
   for (const t of ctx.tables) {
     for (const r of t.relations) {
       const target = `${r.references.schema}.${r.references.table}`;
@@ -86,7 +88,7 @@ export function buildGraph(ctx: ContextView): SemanticGraph {
       const fields = (r.fields ?? [r.field]).join(', ');
       const refCols = (r.references.columns ?? [r.references.column]).join(', ');
       edges.push({
-        id: `fk:${t.qualifiedName}.${fields}->${target}`,
+        id: `fk:${edges.length}:${t.qualifiedName}.${fields}->${target}`,
         source: t.qualifiedName,
         target,
         kind: 'fk',
@@ -115,7 +117,7 @@ export function buildGraph(ctx: ContextView): SemanticGraph {
         });
       }
       edges.push({
-        id: `lineage:${v.qualifiedName}->${target}`,
+        id: `lineage:${edges.length}:${v.qualifiedName}->${target}`,
         source: v.qualifiedName,
         target,
         kind: 'lineage',

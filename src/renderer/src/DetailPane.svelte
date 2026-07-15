@@ -1,25 +1,26 @@
 <script lang="ts">
   import type { ContextView } from '../../shared/contextView';
   import type { AiViews } from '../../shared/types';
+  import type { MapSelection } from './SemanticMap.svelte';
   import JsonTree from './JsonTree.svelte';
 
   let {
     context,
     aiViews,
     selected,
-  }: { context: ContextView; aiViews: AiViews; selected: string } = $props();
+  }: { context: ContextView; aiViews: AiViews; selected: MapSelection } = $props();
 
   type Tab = 'human' | 'ai' | 'raw';
   let tab = $state<Tab>('human');
 
-  const table = $derived(context.tables.find((t) => t.qualifiedName === selected) ?? null);
-  const view = $derived(context.views.find((v) => v.qualifiedName === selected) ?? null);
+  const table = $derived(context.tables.find((t) => t.qualifiedName === selected.id) ?? null);
+  const view = $derived(context.views.find((v) => v.qualifiedName === selected.id) ?? null);
   const entity = $derived(table ?? view);
   const concept = $derived(view ? (context.concepts.find((c) => c.name === view.name) ?? null) : null);
   const aiText = $derived.by(() => {
-    if (table) return aiViews.tables[selected] ?? null;
+    if (table) return aiViews.tables[selected.id] ?? null;
     if (view) {
-      const parts = [aiViews.views[selected]];
+      const parts = [aiViews.views[selected.id]];
       if (concept && aiViews.concepts[concept.name]) {
         parts.push(`// get_concept_context("${concept.name}")`, aiViews.concepts[concept.name]!);
       }
@@ -32,8 +33,15 @@
 </script>
 
 <aside class="detail" data-testid="detail-pane">
-  {#if !entity}
-    <p class="empty">Ghost relation - outside this profile's configured schemas. Add its schema to the profile to inspect it.</p>
+  {#if selected.kind === 'ghost'}
+    <p class="empty">
+      <code>{selected.id}</code> is outside this profile's configured schemas - it appears because a
+      view reads from it. Add its schema to the profile to inspect it.
+    </p>
+  {:else if !entity}
+    <!-- Never claim "outside configured schemas" from mere absence: a stale
+         selection would turn that into a false insight. -->
+    <p class="empty">This relation is not part of the currently selected profile.</p>
   {:else}
     <header>
       <span class="kind {table ? 'table' : 'view'}">{table ? 'TABLE' : 'VIEW'}</span>
@@ -81,7 +89,11 @@
               <tr>
                 <td class="cname">{c.name}{c.isPrimaryKey ? ' *' : ''}{c.isForeignKey ? ' ->' : ''}</td>
                 <td class="ctype">{c.dataType}{c.nullable ? '' : ' NOT NULL'}</td>
-                <td class="cdesc">{c.description ? c.description.split('\n', 1)[0] : ''}</td>
+                <td class="cdesc"
+                  >{c.description ? c.description.split('\n', 1)[0] : ''}{c.enumValues
+                    ? ` [${c.enumValues.join(' | ')}]`
+                    : ''}</td
+                >
               </tr>
             {/each}
           </tbody>
@@ -133,8 +145,9 @@
       {/if}
     {:else if tab === 'ai'}
       <p class="hint">
-        Exactly what an AI agent receives from the MCP describe tools for this relation - same
-        functions, same serialization.
+        What an AI agent receives from the MCP describe tools of a default-configured kozou server
+        for this relation - same functions, same serialization. Server-side opt-ins (RPC exposure
+        config, privilege-aware annotations) are not reproduced here yet.
       </p>
       <pre class="aiview" data-testid="ai-view">{aiText ?? '(no AI view available)'}</pre>
     {:else}

@@ -2,16 +2,17 @@
   import type { ContextView } from '../../shared/contextView';
   import type { InspectResult, ProfileView } from '../../shared/types';
   import DetailPane from './DetailPane.svelte';
+  import EnumsPanel from './EnumsPanel.svelte';
   import FunctionsPanel from './FunctionsPanel.svelte';
   import OverviewCards from './OverviewCards.svelte';
-  import SemanticMap from './SemanticMap.svelte';
+  import SemanticMap, { type MapSelection } from './SemanticMap.svelte';
 
   const api = window.kozouDesktop;
 
   let profiles = $state<ProfileView[]>([]);
   let results = $state<Record<string, InspectResult>>({});
   let selectedProfile = $state<string | null>(null);
-  let selectedEntity = $state<string | null>(null);
+  let selectedEntity = $state<MapSelection | null>(null);
   let inspecting = $state<string | null>(null);
   let formError = $state<string | null>(null);
   let showAddForm = $state(false);
@@ -76,17 +77,30 @@
   }
 
   async function inspect(name: string): Promise<void> {
+    // One inspection at a time: a second worker for the same (or another)
+    // profile mid-flight buys nothing and muddies the in-flight display.
+    if (inspecting !== null) return;
+    if (selectedProfile !== name) {
+      // Selection belongs to the previous profile's map — never let it leak
+      // into another database's detail pane.
+      selectedEntity = null;
+    }
     selectedProfile = name;
     inspecting = name;
+    let result: InspectResult;
     try {
-      results[name] = await api.inspect(name);
+      result = await api.inspect(name);
     } catch (err) {
       // An IPC rejection (e.g. the OS keychain refused to decrypt) must
       // surface in the UI, not vanish as an unhandled rejection.
-      results[name] = { ok: false, error: message(err) };
+      result = { ok: false, error: message(err) };
     } finally {
       inspecting = null;
     }
+    // The profile may have been deleted while the worker ran — a stale
+    // result for a (possibly different) database must not render.
+    if (!profiles.some((p) => p.name === name)) return;
+    results[name] = result;
   }
 
   function selectProfile(name: string): void {
@@ -113,6 +127,10 @@
       <input placeholder="schemas (comma-separated)" bind:value={fSchemas} />
       <input placeholder="timeout ms (optional)" bind:value={fTimeout} size="12" />
       <button type="submit">Save profile</button>
+      <p class="form-hint">
+        Only relations in these schemas appear on the map; foreign keys pointing to other schemas
+        are not shown - include those schemas here to see them.
+      </p>
     </form>
   {/if}
   {#if formError}<p class="error" data-testid="form-error">{formError}</p>{/if}
@@ -137,13 +155,15 @@
         <p class="stats" data-testid="inspect-stats">
           {selectedProfile}: introspect {current.stats.introspectMs}ms - build {current.stats.buildMs}ms
           - full {(current.stats.fullBytes / 1024).toFixed(1)}KiB - sent
-          {(current.stats.trimmedBytes / 1024).toFixed(1)}KiB
+          {(current.stats.trimmedBytes / 1024).toFixed(1)}KiB context + {(
+            current.stats.aiViewsBytes / 1024
+          ).toFixed(1)}KiB AI views
         </p>
         <div class="split">
           <SemanticMap
             context={currentContext}
-            selected={selectedEntity}
-            onselect={(id) => (selectedEntity = id)}
+            selected={selectedEntity?.id ?? null}
+            onselect={(selection) => (selectedEntity = selection)}
           />
           {#if selectedEntity}
             <DetailPane context={currentContext} aiViews={current.aiViews} selected={selectedEntity} />
@@ -152,6 +172,7 @@
           {/if}
         </div>
         <FunctionsPanel functions={currentContext.functions ?? []} aiText={current.aiViews.functions} />
+        <EnumsPanel enums={currentContext.enums} />
       {/if}
     </section>
   {/if}
@@ -216,6 +237,12 @@
   .error {
     color: #a00;
     margin: 0;
+  }
+  .form-hint {
+    flex-basis: 100%;
+    margin: 0;
+    color: #888;
+    font-size: 0.75rem;
   }
   .stats {
     color: #555;

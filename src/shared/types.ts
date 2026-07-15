@@ -43,8 +43,11 @@ export type InspectStats = {
   buildMs: number;
   /** Byte length of the full SchemaContext JSON (raw records included). */
   fullBytes: number;
-  /** Byte length of the trimmed JSON actually sent to the renderer. */
+  /** Byte length of the trimmed context JSON sent to the renderer. */
   trimmedBytes: number;
+  /** Byte length of the AI-view payloads riding the same IPC message —
+   *  counted separately so "sent" reporting stays honest. */
+  aiViewsBytes: number;
 };
 
 /** What the AI literally receives from the MCP describe tools: the same

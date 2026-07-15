@@ -15,7 +15,8 @@ export function computeCoverage(ctx: ContextView): Coverage {
   const rels = [...ctx.tables, ...ctx.views];
   const annotated = rels.filter((r) => Boolean(r.description) || Boolean(r.aiDescription)).length;
   const allColumns = rels.flatMap((r) => r.columns);
-  const annotatedColumns = allColumns.filter((c) => Boolean(c.description)).length;
+  // Symmetric with relations: a column annotated only via @ai still counts.
+  const annotatedColumns = allColumns.filter((c) => Boolean(c.description) || Boolean(c.aiDescription)).length;
   return {
     relationCount: {
       tables: ctx.tables.length,

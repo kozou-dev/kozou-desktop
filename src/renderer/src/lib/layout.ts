@@ -1,7 +1,9 @@
 // elk layout for the semantic map. Runs on the UI thread: the packaged app
-// loads over file://, where Chromium refuses to start Web Workers, and MVP
-// graphs (tens of nodes) lay out in milliseconds. Revisit worker offloading
-// (with proper packaging) if real schemas make layout noticeable.
+// loads over file://, where Chromium refuses to start module workers loaded
+// from file URLs, and MVP graphs (tens of nodes) lay out in milliseconds.
+// If real schemas make layout noticeable, the viable offload path is elkjs's
+// Blob-URL workerFactory (works under file://; needs `worker-src blob:` in
+// the CSP) — recorded here so the revisit starts from the right option.
 
 import ELK from 'elkjs/lib/elk.bundled.js';
 import type { ElkExtendedEdge, ElkNode } from 'elkjs/lib/elk-api';
