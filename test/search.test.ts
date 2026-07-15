@@ -16,10 +16,27 @@ const table = (over: Record<string, unknown>): ContextView['tables'][number] =>
     ...over,
   }) as ContextView['tables'][number];
 
-const ctx = (tables: ContextView['tables']): ContextView => ({
+const view = (over: Record<string, unknown>): ContextView['views'][number] =>
+  ({
+    schema: 'public',
+    name: 'v',
+    qualifiedName: 'public.v',
+    label: 'v',
+    description: null,
+    aiDescription: null,
+    purpose: null,
+    columns: [],
+    underlyingTables: [],
+    ...over,
+  }) as ContextView['views'][number];
+
+const ctx = (
+  tables: ContextView['tables'],
+  views: ContextView['views'] = [],
+): ContextView => ({
   meta: { serverVersion: 'x', builtAt: 'x', sourceSchemas: ['public'] },
   tables,
-  views: [],
+  views,
   enums: [],
   concepts: [],
   functions: [],
@@ -56,6 +73,36 @@ describe('searchContexts', () => {
     const { hits } = searchContexts(contexts, 'buy things');
     expect(hits).toHaveLength(1);
     expect(hits[0]).toMatchObject({ id: 'public.customers', matchedIn: 'comment' });
+  });
+
+  it('matches views and tags them with kind "view"', () => {
+    const withViews = {
+      analytics: ctx(
+        [table({ name: 'events', qualifiedName: 'public.events' })],
+        [view({ name: 'recent_events', qualifiedName: 'public.recent_events', label: 'recent_events' })],
+      ),
+    };
+    const { hits } = searchContexts(withViews, 'recent_events');
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ kind: 'view', id: 'public.recent_events' });
+  });
+
+  it('reports truncation past the result cap', () => {
+    const many = Array.from({ length: 60 }, (_, i) =>
+      table({ name: `t${i}`, qualifiedName: `public.match_${i}` }),
+    );
+    const { hits, truncated } = searchContexts({ big: ctx(many) }, 'match_');
+    expect(hits).toHaveLength(50);
+    expect(truncated).toBe(true);
+  });
+
+  it('excerpts around a match buried deep in a long comment', () => {
+    const long = 'x'.repeat(200) + ' NEEDLE ' + 'y'.repeat(200);
+    const { hits } = searchContexts({ p: ctx([table({ description: long })]) }, 'needle');
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.snippet.toLowerCase()).toContain('needle');
+    expect(hits[0]!.snippet.startsWith('...')).toBe(true);
+    expect(hits[0]!.snippet.endsWith('...')).toBe(true);
   });
 
   it('ranks name matches ahead of comment/@ai matches', () => {

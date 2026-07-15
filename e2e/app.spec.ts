@@ -25,20 +25,25 @@ test('two profiles: map, detail pane, and AI view end-to-end', async () => {
   });
   const page = await app.firstWindow();
 
-  for (const name of ['alpha', 'beta']) {
-    // The add form auto-opens when there are no profiles; open it otherwise.
-    // isVisible() does not auto-wait, so give the auto-open a beat before
-    // concluding the form is closed — on a slow runner an immediate check
-    // races the initial mount, and a blind toggle click would close the form
-    // that was about to open.
-    // exact: the search box placeholder also contains the word "name".
+  // The add form auto-opens on first run (empty) and closes after each save,
+  // and the toggle's label flips between "+ Add database" and "Close". Both
+  // make a one-shot open racy on a slow runner. Retry the whole open until
+  // the name field is visible: if a click closed an already-open form, the
+  // next attempt reopens it. Uses a stable testid so the flipping label
+  // doesn't matter. exact: the search box placeholder also contains "name".
+  const openAddForm = async (): Promise<void> => {
     const nameInput = page.getByPlaceholder('name', { exact: true });
-    try {
-      await nameInput.waitFor({ state: 'visible', timeout: 3000 });
-    } catch {
-      await page.getByRole('button', { name: '+ Add database' }).click();
-      await nameInput.waitFor({ state: 'visible' });
-    }
+    await expect(async () => {
+      if (!(await nameInput.isVisible())) {
+        await page.getByTestId('add-toggle').click();
+      }
+      await expect(nameInput).toBeVisible({ timeout: 2000 });
+    }).toPass({ timeout: 30_000 });
+  };
+
+  for (const name of ['alpha', 'beta']) {
+    await openAddForm();
+    const nameInput = page.getByPlaceholder('name', { exact: true });
     await nameInput.fill(name);
     await page.getByPlaceholder('postgresql://user:password@host:5432/db').fill(url!);
     await page.getByPlaceholder('schemas (comma-separated)').fill('public');

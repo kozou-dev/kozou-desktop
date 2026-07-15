@@ -144,7 +144,7 @@
 <main>
   <header class="top">
     <h1>kozou Desktop <span class="tag">Semantic Map</span></h1>
-    <button class="add" onclick={() => (showAddForm = !showAddForm)}>
+    <button class="add" data-testid="add-toggle" onclick={() => (showAddForm = !showAddForm)}>
       {showAddForm ? 'Close' : '+ Add database'}
     </button>
   </header>

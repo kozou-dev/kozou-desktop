@@ -29,8 +29,10 @@ Open-ended — a sentence each is plenty:
   annotation, or view didn't appear where you expected. (Foreign keys to
   schemas you didn't add to the profile are intentionally hidden; views that
   read from outside those schemas show as dashed "ghost" nodes.)
-- The **AI view** tab shows the exact payload an AI agent receives from the MCP
-  describe tools of a default-configured kozou server. Was seeing that useful?
+- The **AI view** tab shows the payload an AI agent receives from the MCP
+  describe tools of a *default-configured* kozou server (server-side opt-ins
+  like RPC exposure config or privilege-aware annotations are not reproduced
+  yet). Was seeing that useful?
 - Crashes, slowness on large schemas, or anything that made you stop.
 
 Send notes back however is easiest — a bulleted email is perfect. Honest "I
