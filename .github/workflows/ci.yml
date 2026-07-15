@@ -13,8 +13,12 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_USER: kozou
-          POSTGRES_PASSWORD: kozou
           POSTGRES_DB: kozou
+          # Trust auth so the test URL needs no password: Electron safeStorage
+          # is unavailable on headless Linux (no keyring), and the app
+          # deliberately refuses to store passwords without it. The
+          # password/encryption path is covered by unit tests instead.
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
@@ -23,7 +27,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      KOZOU_TEST_DATABASE_URL: postgresql://kozou:kozou@127.0.0.1:5432/kozou
+      KOZOU_TEST_DATABASE_URL: postgresql://kozou@127.0.0.1:5432/kozou
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
