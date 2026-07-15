@@ -24,8 +24,13 @@ No installer yet — run it from source (Node 22+ and [pnpm](https://pnpm.io) re
 git clone https://github.com/kozou-dev/kozou-desktop.git
 cd kozou-desktop
 pnpm install
-pnpm dev
+pnpm start
 ```
+
+`pnpm start` builds and launches the packaged app, so you run it under the
+same strict Content-Security-Policy the shipped build enforces (see Security
+posture below). `pnpm dev` also works but uses a looser, localhost-only dev
+CSP for hot reload — prefer `pnpm start` for a trial.
 
 Then click **+ Add database**, paste a read-only PostgreSQL connection URL
 (`postgresql://user:password@host:5432/db`), list the schemas to include, and

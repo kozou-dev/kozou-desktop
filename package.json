@@ -8,6 +8,7 @@
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
+    "start": "electron-vite preview",
     "build": "electron-vite build",
     "typecheck:node": "tsc -p tsconfig.node.json --noEmit",
     "typecheck:web": "svelte-check --tsconfig ./tsconfig.web.json --fail-on-warnings",
