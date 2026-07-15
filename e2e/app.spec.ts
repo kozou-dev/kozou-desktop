@@ -29,6 +29,9 @@ test('two profiles inspect end-to-end', async () => {
     await page.getByPlaceholder('postgresql://user:password@host:5432/db').fill(url!);
     await page.getByPlaceholder('schemas (comma-separated)').fill('public');
     await page.getByRole('button', { name: 'Save profile' }).click();
+    // Surface a save failure (e.g. secret storage unavailable) instead of a
+    // bare not-found timeout on the list item.
+    await expect(page.getByTestId('form-error')).toHaveCount(0);
     await expect(page.locator('li', { hasText: name })).toBeVisible();
   }
 
