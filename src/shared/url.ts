@@ -22,7 +22,18 @@ function parse(raw: string): URL {
 /** Split a URL into its password-free form + the password (null if none). */
 export function splitDbUrl(raw: string): { sansPassword: string; password: string | null } {
   const url = parse(raw);
-  const password = url.password === '' ? null : decodeURIComponent(url.password);
+  let password: string | null = null;
+  if (url.password !== '') {
+    try {
+      password = decodeURIComponent(url.password);
+    } catch {
+      // A raw "%" (or other broken percent-escape) in the password.
+      throw new Error(
+        'connection URL password contains an invalid percent-escape — ' +
+          'URL-encode special characters (e.g. "%" as "%25", "@" as "%40")',
+      );
+    }
+  }
   url.password = '';
   return { sansPassword: url.toString(), password };
 }
@@ -39,24 +50,46 @@ export function joinDbUrl(sansPassword: string, password: string | null): string
 export function maskDbUrl(raw: string): string {
   try {
     const url = parse(raw);
-    if (url.password !== '') url.password = '***';
-    return url.toString().replace('***', '•••');
+    if (url.password === '') return url.toString();
+    const auth = url.username !== '' ? `${url.username}:•••@` : ':•••@';
+    return `${url.protocol}//${auth}${url.host}${url.pathname}${url.search}`;
   } catch {
     return '(unparseable connection URL)';
   }
 }
 
-/** Scrub a free-form error message of connection secrets. */
+/** Compact, low-identifier display form for the profile list: host:port/db —
+ *  no scheme, no username, never a password. Keeps screenshots of the
+ *  profile list from carrying more identifiers than necessary. */
+export function displayConnection(sansPassword: string): string {
+  try {
+    const url = parse(sansPassword);
+    return `${url.host}${url.pathname}`;
+  } catch {
+    return '(unparseable connection URL)';
+  }
+}
+
+/** Scrub a free-form error message of connection secrets. Covers the full
+ *  URL, the decoded password, and the percent-encoded password form. */
 export function sanitizeErrorMessage(message: string, fullUrl: string | undefined): string {
   if (!fullUrl) return message;
   let out = message.split(fullUrl).join('(connection URL)');
+  const candidates: string[] = [];
   try {
-    const { password } = splitDbUrl(fullUrl);
-    if (password !== null && password.length > 0) {
-      out = out.split(password).join('•••');
-    }
+    const url = parse(fullUrl);
+    if (url.password !== '') candidates.push(url.password); // encoded form
   } catch {
     // fullUrl unparseable — the literal replacement above already covered it.
+  }
+  try {
+    const { password } = splitDbUrl(fullUrl);
+    if (password !== null) candidates.push(password); // decoded form
+  } catch {
+    // Undecodable password — the encoded form above still gets scrubbed.
+  }
+  for (const secret of candidates) {
+    if (secret.length > 0) out = out.split(secret).join('•••');
   }
   return out;
 }

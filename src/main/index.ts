@@ -3,19 +3,32 @@
 // network peer is the user's own database, reached from short-lived workers.
 
 import { join } from 'node:path';
-import { BrowserWindow, app, ipcMain, safeStorage, session, shell } from 'electron';
-import type { ProfileInput } from '../shared/types.js';
+import { BrowserWindow, app, ipcMain, safeStorage, session } from 'electron';
 import { IPC } from '../shared/types.js';
 import { runInspectWorker } from './inspectRunner.js';
-import { ProfileStore, type Encryptor } from './profileStore.js';
+import { ProfileStore, validateProfileInput, type Encryptor } from './profileStore.js';
 
-// Test hook: e2e runs point userData at a temp dir so trial/dev profiles
-// never mix with real ones.
-const userDataOverride = process.env.KOZOU_DESKTOP_USER_DATA;
+// Test hooks (dev/e2e only): a packaged app must never honor env overrides —
+// ELECTRON_RENDERER_URL with the preload bridge attached would hand the
+// kozouDesktop API to an arbitrary page.
+const isDev = !app.isPackaged;
+const userDataOverride = isDev ? process.env.KOZOU_DESKTOP_USER_DATA : undefined;
 if (userDataOverride) app.setPath('userData', userDataOverride);
 
+/** True when safeStorage really is backed by an OS keychain. On Linux,
+ *  `isEncryptionAvailable()` also returns true for the `basic_text` backend
+ *  (a hardcoded key — obfuscation, not encryption, and selectable by anyone
+ *  via `--password-store=basic`), so that backend is rejected explicitly. */
+function keychainBackedEncryptionAvailable(): boolean {
+  if (!safeStorage.isEncryptionAvailable()) return false;
+  if (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text') {
+    return false;
+  }
+  return true;
+}
+
 const safeStorageEncryptor: Encryptor = {
-  available: () => safeStorage.isEncryptionAvailable(),
+  available: keychainBackedEncryptionAvailable,
   encrypt: (plaintext) => safeStorage.encryptString(plaintext).toString('base64'),
   decrypt: (blob) => safeStorage.decryptString(Buffer.from(blob, 'base64')),
 };
@@ -38,15 +51,13 @@ function createWindow(): void {
     },
   });
 
-  // Never navigate away from our own UI; open nothing external.
+  // Never navigate away from our own UI, never open new windows. The M1 UI
+  // has no external links; when docs links land, reintroduce an explicit
+  // https allowlist handed to the OS browser — until then, deny everything.
   win.webContents.on('will-navigate', (event) => event.preventDefault());
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    // Documentation links (https only) go to the OS browser, not into the app.
-    if (url.startsWith('https://')) void shell.openExternal(url);
-    return { action: 'deny' };
-  });
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
-  if (process.env.ELECTRON_RENDERER_URL) {
+  if (isDev && process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
     void win.loadFile(join(import.meta.dirname, '../renderer/index.html'));
@@ -59,9 +70,13 @@ void app.whenReady().then(() => {
   store = new ProfileStore(join(app.getPath('userData'), 'store'), safeStorageEncryptor);
 
   ipcMain.handle(IPC.profilesList, () => store.list());
-  ipcMain.handle(IPC.profilesSave, (_e, input: ProfileInput) => store.upsert(input));
-  ipcMain.handle(IPC.profilesDelete, (_e, name: string) => store.remove(name));
-  ipcMain.handle(IPC.inspectRun, async (_e, name: string) => {
+  ipcMain.handle(IPC.profilesSave, (_e, input: unknown) => store.upsert(validateProfileInput(input)));
+  ipcMain.handle(IPC.profilesDelete, (_e, name: unknown) => {
+    if (typeof name !== 'string') throw new Error('profile name must be a string');
+    return store.remove(name);
+  });
+  ipcMain.handle(IPC.inspectRun, async (_e, name: unknown) => {
+    if (typeof name !== 'string') throw new Error('profile name must be a string');
     const connection = store.connectionUrl(name);
     const workerPath = join(import.meta.dirname, 'inspectWorker.js');
     return runInspectWorker(workerPath, connection);

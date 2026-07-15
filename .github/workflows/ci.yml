@@ -17,7 +17,8 @@ jobs:
           # Trust auth so the test URL needs no password: Electron safeStorage
           # is unavailable on headless Linux (no keyring), and the app
           # deliberately refuses to store passwords without it. The
-          # password/encryption path is covered by unit tests instead.
+          # password/encryption *logic* is unit-tested with a fake encryptor;
+          # the real safeStorage integration path runs in the macos-e2e job.
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
@@ -49,3 +50,32 @@ jobs:
       - run: pnpm check:egress
       - name: E2E (xvfb)
         run: xvfb-run -a pnpm test:e2e
+
+  # Exercises the REAL safeStorage path (macOS Keychain): the profile URL
+  # carries a password (the trust-auth server accepts any), so the e2e run
+  # covers encrypt -> store -> decrypt -> rejoin -> worker end to end —
+  # coverage the Linux job cannot provide.
+  macos-e2e:
+    runs-on: macos-latest
+    env:
+      KOZOU_TEST_DATABASE_URL: postgresql://kozou:trialpass@127.0.0.1:5432/kozou
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Start PostgreSQL 16 (trust auth)
+        run: |
+          brew install postgresql@16
+          PGBIN="$(brew --prefix postgresql@16)/bin"
+          "$PGBIN/initdb" --username=kozou --auth=trust "$RUNNER_TEMP/pgdata"
+          "$PGBIN/pg_ctl" -D "$RUNNER_TEMP/pgdata" -l "$RUNNER_TEMP/pg.log" start
+          "$PGBIN/createdb" --username=kozou kozou
+          "$PGBIN/psql" "$KOZOU_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f fixtures/contract.sql
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test:e2e

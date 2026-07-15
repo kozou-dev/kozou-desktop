@@ -3,12 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <!-- Zero-egress posture (see EGRESS.md): the renderer may load nothing
-         beyond its own bundled assets. connect-src covers Vite HMR in dev;
-         the packaged app performs no network requests from the renderer. -->
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://localhost:* http://localhost:*; object-src 'none'; base-uri 'none'"
-    />
+         beyond its own bundled assets. This dev-mode CSP allows Vite HMR on
+         localhost; the production build replaces it with a strict CSP
+         (no localhost) via the build-time transform in electron.vite.config.ts. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://localhost:* http://localhost:*; object-src 'none'; base-uri 'none'" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>kozou Desktop</title>
   </head>

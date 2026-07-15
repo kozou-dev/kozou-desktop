@@ -1,6 +1,31 @@
 import { resolve } from 'node:path';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
+import type { Plugin } from 'vite';
+
+// The dev CSP in index.html allows Vite HMR on localhost; production must
+// not (a compromised renderer could otherwise reach arbitrary local ports).
+// This transform swaps in the strict CSP at build time.
+const PROD_CSP =
+  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+  "img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'";
+
+function productionCsp(): Plugin {
+  return {
+    name: 'kozou-desktop:production-csp',
+    apply: 'build',
+    transformIndexHtml(html) {
+      const replaced = html.replace(
+        /<meta http-equiv="Content-Security-Policy" content="[^"]*" \/>/,
+        `<meta http-equiv="Content-Security-Policy" content="${PROD_CSP}" />`,
+      );
+      if (replaced === html) {
+        throw new Error('production-csp: CSP meta tag not found in index.html');
+      }
+      return replaced;
+    },
+  };
+}
 
 export default defineConfig({
   main: {
@@ -31,6 +56,6 @@ export default defineConfig({
     },
   },
   renderer: {
-    plugins: [svelte()],
+    plugins: [svelte(), productionCsp()],
   },
 });
