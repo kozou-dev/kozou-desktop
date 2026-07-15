@@ -47,10 +47,22 @@ export type InspectStats = {
   trimmedBytes: number;
 };
 
+/** What the AI literally receives from the MCP describe tools: the same
+ *  pure functions, serialized exactly as the MCP server does
+ *  (JSON.stringify(payload, null, 2)). Keyed by qualified name (concepts by
+ *  concept name; functions is the single describe_functions payload). */
+export type AiViews = {
+  tables: Record<string, string>;
+  views: Record<string, string>;
+  concepts: Record<string, string>;
+  functions: string | null;
+};
+
 export type InspectSuccess = {
   ok: true;
   /** Trimmed SchemaContext (rawTable/rawView/rawFunction stripped). */
   context: unknown;
+  aiViews: AiViews;
   stats: InspectStats;
 };
 

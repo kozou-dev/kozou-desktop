@@ -1,6 +1,6 @@
 # kozou Desktop
 
-**Status: experimental — validation-first MVP (M1). Not released; no builds are distributed yet.**
+**Status: experimental — validation-first MVP (M2: semantic map). Not released; no builds are distributed yet.**
 
 A read-only desktop app that renders the **semantic model** [kozou](https://kozou.org) compiles from your PostgreSQL schema — table/column COMMENTs with `@ai`/`@policy` tags, views and their lineage, foreign-key relationships and their documented meaning — as a human-facing visual map, across multiple databases.
 
@@ -8,7 +8,11 @@ AI agents already see this model through kozou's MCP describe surface. Generic D
 
 ## What it is (and isn't)
 
-- **Is**: a local, read-only visual surface for compiled schema semantics, with named per-database profiles.
+- **Is**: a local, read-only visual surface for compiled schema semantics, with named per-database profiles:
+  - **Semantic map** — tables, views, FK relationships (with their documented meaning), view lineage, and `@ai`/`@policy`/RLS badges, laid out as a graph.
+  - **Detail pane** — the full compiled semantics of a relation, including join suggestions and example queries.
+  - **AI view** — the exact payload an AI agent receives from the MCP describe tools for that relation: same functions, same serialization.
+  - **Cross-database overview** — per-profile cards with relation counts and annotation coverage.
 - **Is not**: a chat client (bring your own — Claude Desktop, Cursor, etc. connect to kozou over MCP), a schema editor (schema and COMMENTs stay in SQL/Git), or a general DB client.
 
 ## Security posture

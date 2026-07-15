@@ -1,17 +1,20 @@
 <script lang="ts">
+  import type { ContextView } from '../../shared/contextView';
   import type { InspectResult, ProfileView } from '../../shared/types';
-  import { displayConnection } from '../../shared/url';
-  import JsonTree from './JsonTree.svelte';
+  import DetailPane from './DetailPane.svelte';
+  import FunctionsPanel from './FunctionsPanel.svelte';
+  import OverviewCards from './OverviewCards.svelte';
+  import SemanticMap from './SemanticMap.svelte';
 
   const api = window.kozouDesktop;
 
   let profiles = $state<ProfileView[]>([]);
-  let selected = $state<string | null>(null);
-  let result = $state<InspectResult | null>(null);
-  let inspecting = $state(false);
+  let results = $state<Record<string, InspectResult>>({});
+  let selectedProfile = $state<string | null>(null);
+  let selectedEntity = $state<string | null>(null);
+  let inspecting = $state<string | null>(null);
   let formError = $state<string | null>(null);
-
-  const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+  let showAddForm = $state(false);
 
   // Add-profile form
   let fName = $state('');
@@ -19,9 +22,15 @@
   let fSchemas = $state('public');
   let fTimeout = $state('');
 
+  const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+  const current = $derived(selectedProfile ? (results[selectedProfile] ?? null) : null);
+  const currentContext = $derived(current?.ok ? (current.context as ContextView) : null);
+
   async function refresh(): Promise<void> {
     try {
       profiles = await api.listProfiles();
+      if (profiles.length === 0) showAddForm = true;
     } catch (err) {
       formError = message(err);
     }
@@ -31,8 +40,9 @@
     event.preventDefault();
     formError = null;
     try {
+      const name = fName.trim();
       profiles = await api.saveProfile({
-        name: fName.trim(),
+        name,
         url: fUrl.trim(),
         schemas: fSchemas
           .split(',')
@@ -44,6 +54,8 @@
       fUrl = '';
       fSchemas = 'public';
       fTimeout = '';
+      showAddForm = false;
+      await inspect(name);
     } catch (err) {
       formError = message(err);
     }
@@ -56,53 +68,45 @@
       formError = message(err);
       return;
     }
-    if (selected === name) {
-      selected = null;
-      result = null;
+    delete results[name];
+    if (selectedProfile === name) {
+      selectedProfile = null;
+      selectedEntity = null;
     }
   }
 
   async function inspect(name: string): Promise<void> {
-    selected = name;
-    inspecting = true;
-    result = null;
+    selectedProfile = name;
+    inspecting = name;
     try {
-      result = await api.inspect(name);
+      results[name] = await api.inspect(name);
     } catch (err) {
       // An IPC rejection (e.g. the OS keychain refused to decrypt) must
       // surface in the UI, not vanish as an unhandled rejection.
-      result = { ok: false, error: message(err) };
+      results[name] = { ok: false, error: message(err) };
     } finally {
-      inspecting = false;
+      inspecting = null;
     }
+  }
+
+  function selectProfile(name: string): void {
+    selectedProfile = name;
+    selectedEntity = null;
+    if (!results[name]) void inspect(name);
   }
 
   void refresh();
 </script>
 
 <main>
-  <h1>kozou Desktop <span class="tag">Semantic Map MVP — M1</span></h1>
+  <header class="top">
+    <h1>kozou Desktop <span class="tag">Semantic Map</span></h1>
+    <button class="add" onclick={() => (showAddForm = !showAddForm)}>
+      {showAddForm ? 'Close' : '+ Add database'}
+    </button>
+  </header>
 
-  <section class="profiles">
-    <h2>Profiles</h2>
-    {#if profiles.length === 0}
-      <p class="empty">No profiles yet. Add a database below.</p>
-    {/if}
-    <ul>
-      {#each profiles as p (p.name)}
-        <li class:active={selected === p.name}>
-          <span class="dot" style:background={p.color ?? '#888'}></span>
-          <strong>{p.name}</strong>
-          <!-- Compact host/db form: no scheme, no username — keeps
-               screenshots of this list low on identifiers. -->
-          <code>{displayConnection(p.url)}</code>
-          <span class="schemas">[{p.schemas.join(', ')}]</span>
-          <button onclick={() => inspect(p.name)} disabled={inspecting}>Inspect</button>
-          <button class="danger" onclick={() => remove(p.name)}>Delete</button>
-        </li>
-      {/each}
-    </ul>
-
+  {#if showAddForm}
     <form onsubmit={save}>
       <input placeholder="name" bind:value={fName} required />
       <input placeholder="postgresql://user:password@host:5432/db" bind:value={fUrl} required size="42" />
@@ -110,27 +114,47 @@
       <input placeholder="timeout ms (optional)" bind:value={fTimeout} size="12" />
       <button type="submit">Save profile</button>
     </form>
-    {#if formError}<p class="error" data-testid="form-error">{formError}</p>{/if}
-  </section>
+  {/if}
+  {#if formError}<p class="error" data-testid="form-error">{formError}</p>{/if}
 
-  <section class="result">
-    <h2>Compiled semantic model {selected ? `— ${selected}` : ''}</h2>
-    {#if inspecting}
-      <p data-testid="inspect-running">Introspecting…</p>
-    {:else if result === null}
-      <p class="empty">Select a profile and press Inspect.</p>
-    {:else if result.ok}
-      <p class="stats" data-testid="inspect-stats">
-        introspect {result.stats.introspectMs}ms · build {result.stats.buildMs}ms · full
-        {(result.stats.fullBytes / 1024).toFixed(1)}KiB · sent {(result.stats.trimmedBytes / 1024).toFixed(1)}KiB
-      </p>
-      <div class="tree" data-testid="context-tree">
-        <JsonTree name="SchemaContext" value={result.context} open />
-      </div>
-    {:else}
-      <p class="error" data-testid="inspect-error">{result.error}</p>
-    {/if}
-  </section>
+  <OverviewCards
+    {profiles}
+    {results}
+    selected={selectedProfile}
+    {inspecting}
+    oninspect={(name) => void inspect(name)}
+    onselect={selectProfile}
+    ondelete={(name) => void remove(name)}
+  />
+
+  {#if selectedProfile}
+    <section class="workspace">
+      {#if inspecting === selectedProfile && !current}
+        <p data-testid="inspect-running">Introspecting {selectedProfile}...</p>
+      {:else if current && !current.ok}
+        <p class="error" data-testid="inspect-error">{current.error}</p>
+      {:else if current?.ok && currentContext}
+        <p class="stats" data-testid="inspect-stats">
+          {selectedProfile}: introspect {current.stats.introspectMs}ms - build {current.stats.buildMs}ms
+          - full {(current.stats.fullBytes / 1024).toFixed(1)}KiB - sent
+          {(current.stats.trimmedBytes / 1024).toFixed(1)}KiB
+        </p>
+        <div class="split">
+          <SemanticMap
+            context={currentContext}
+            selected={selectedEntity}
+            onselect={(id) => (selectedEntity = id)}
+          />
+          {#if selectedEntity}
+            <DetailPane context={currentContext} aiViews={current.aiViews} selected={selectedEntity} />
+          {:else}
+            <aside class="placeholder">Click a relation on the map to see its compiled semantics - and exactly what your AI receives for it.</aside>
+          {/if}
+        </div>
+        <FunctionsPanel functions={currentContext.functions ?? []} aiText={current.aiViews.functions} />
+      {/if}
+    </section>
+  {/if}
 </main>
 
 <style>
@@ -141,12 +165,21 @@
     background: #fafafa;
   }
   main {
-    max-width: 1100px;
+    max-width: 1280px;
     margin: 0 auto;
     padding: 1rem 1.5rem 3rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+  }
+  .top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
   }
   h1 {
-    font-size: 1.2rem;
+    font-size: 1.15rem;
+    margin: 0;
   }
   .tag {
     font-size: 0.7rem;
@@ -157,42 +190,10 @@
     padding: 0.1rem 0.5rem;
     vertical-align: middle;
   }
-  section {
-    margin-top: 1.5rem;
-  }
-  ul {
-    list-style: none;
-    padding: 0;
-  }
-  li {
-    display: flex;
-    gap: 0.6rem;
-    align-items: center;
-    padding: 0.35rem 0.5rem;
-    border-radius: 6px;
-  }
-  li.active {
-    background: #eef3ff;
-  }
-  .dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    display: inline-block;
-  }
-  code {
-    color: #555;
-    font-size: 0.85em;
-  }
-  .schemas {
-    color: #888;
-    font-size: 0.8em;
-  }
   form {
     display: flex;
     gap: 0.5rem;
     flex-wrap: wrap;
-    margin-top: 0.75rem;
   }
   input {
     padding: 0.35rem 0.5rem;
@@ -209,24 +210,38 @@
   button:hover {
     background: #f0f0f0;
   }
-  .danger {
-    color: #a00;
+  .add {
+    font-size: 0.85rem;
   }
   .error {
     color: #a00;
-  }
-  .empty {
-    color: #888;
+    margin: 0;
   }
   .stats {
     color: #555;
-    font-size: 0.85em;
+    font-size: 0.8em;
+    margin: 0;
   }
-  .tree {
-    background: #fff;
-    border: 1px solid #e2e2e2;
+  .workspace {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+  .split {
+    display: grid;
+    grid-template-columns: minmax(0, 1.6fr) minmax(300px, 1fr);
+    gap: 0.7rem;
+  }
+  .placeholder {
+    border: 1px dashed #ccc;
     border-radius: 8px;
-    padding: 0.75rem;
-    overflow-x: auto;
+    color: #888;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    text-align: center;
+    height: 460px;
+    box-sizing: border-box;
   }
 </style>

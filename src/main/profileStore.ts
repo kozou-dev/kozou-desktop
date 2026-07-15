@@ -33,6 +33,9 @@ type StoreFile = { version: 1; profiles: StoredProfile[] };
 
 const PROFILE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
+/** Upper bound for the per-statement introspection timeout (5 minutes). */
+export const MAX_TIMEOUT_MS = 300_000;
+
 /** Validate untrusted IPC input into a well-typed ProfileInput. All renderer
  *  input crosses this before touching the store (a compromised renderer must
  *  not be able to persist junk state). */
@@ -50,9 +53,14 @@ export function validateProfileInput(input: unknown): ProfileInput {
   ) {
     throw new Error('schemas must be a non-empty array of non-empty strings');
   }
-  if (p.timeoutMs !== undefined && (!Number.isInteger(p.timeoutMs) || (p.timeoutMs as number) <= 0)) {
-    // 0 would mean "no statement timeout" in PostgreSQL — never allow that here.
-    throw new Error('timeoutMs must be a positive integer');
+  if (
+    p.timeoutMs !== undefined &&
+    (!Number.isInteger(p.timeoutMs) || (p.timeoutMs as number) <= 0 || (p.timeoutMs as number) > MAX_TIMEOUT_MS)
+  ) {
+    // 0 would mean "no statement timeout" in PostgreSQL — never allow that
+    // here; and an unbounded value would stretch the worker hang guard
+    // (per-statement budget x statement count) into hours.
+    throw new Error(`timeoutMs must be a positive integer <= ${MAX_TIMEOUT_MS}`);
   }
   return {
     name: p.name,
@@ -85,8 +93,10 @@ export class ProfileStore {
     }
     // Corrupt store: preserve it before starting empty — encrypted password
     // blobs are not re-derivable, so the user may want to recover them.
+    // Timestamped so a second corruption never overwrites the first backup.
     try {
-      copyFileSync(this.file, `${this.file}.corrupt`);
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      copyFileSync(this.file, `${this.file}.corrupt-${stamp}`);
     } catch {
       // If even the backup fails there is nothing more we can do safely.
     }

@@ -54,8 +54,10 @@ jobs:
   # Exercises the REAL safeStorage path (macOS Keychain): the profile URL
   # carries a password (the trust-auth server accepts any), so the e2e run
   # covers encrypt -> store -> decrypt -> rejoin -> worker end to end —
-  # coverage the Linux job cannot provide.
+  # coverage the Linux job cannot provide. Runs on pushes to main only
+  # (macOS runners cost ~10x; the Linux job still gates every PR).
   macos-e2e:
+    if: github.event_name == 'push'
     runs-on: macos-latest
     env:
       KOZOU_TEST_DATABASE_URL: postgresql://kozou:trialpass@127.0.0.1:5432/kozou

@@ -13,7 +13,7 @@ NDA-covered databases depend on this.
 | 5 | Spellchecker dictionary download off | `spellcheck: false` + `setSpellCheckerEnabled(false)` | same |
 | 6 | No external navigation | `will-navigate` prevented; `window.open` denied entirely (no `openExternal` path in M1) | same (`shell.openExternal` is a forbidden token) |
 | 7 | Secrets not in argv/logs | connection URL via env to worker; error messages sanitized (decoded + percent-encoded forms) | unit tests (`test/url.test.ts`, `test/profileStore.test.ts`) |
-| 8 | Write surfaces absent | `@kozou/api` not in prod dependency tree; worker bundle free of MCP/execution markers | `scripts/check-treeshake.mjs` (CI) |
+| 8 | Write surfaces absent | `@kozou/api` not in prod dependency tree; worker bundle free of MCP server/transport and execution-path markers (MCP SDK type/validation modules are present by design — the describe output schemas reach them; no server, no transport, no execution) | `scripts/check-treeshake.mjs` (CI) |
 | 9 | Real keychain only | on Linux, the `basic_text` safeStorage backend (hardcoded key) is rejected — passwords are stored only under a real keyring | code (`src/main/index.ts`) |
 
 ## Runtime verification (manual until M3)
