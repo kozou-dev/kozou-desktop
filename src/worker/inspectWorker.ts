@@ -2,14 +2,15 @@
 // profile = one short-lived process; contexts for different databases are
 // never mixed in one process). The connection URL arrives via env only
 // (never argv, never in the IPC message); the reply is the trimmed
-// SchemaContext plus measurements. The worker serves a single request; the
-// parent terminates it after receiving the reply (no self-exit timer — a
-// timer would race the flush of a large reply).
+// SchemaContext, the AI-view payloads, and measurements. The worker serves a
+// single request; the parent terminates it after receiving the reply (no
+// self-exit timer — a timer would race the flush of a large reply).
 
 import processGlobal from 'node:process';
 import { trimContext } from '../shared/trim.js';
 import { sanitizeErrorMessage } from '../shared/url.js';
-import type { InspectResult, WorkerRequest } from '../shared/types.js';
+import type { AiViews, InspectResult, WorkerRequest } from '../shared/types.js';
+import { buildAiViews } from './aiViews.js';
 import { runInspect } from './runInspect.js';
 
 const ENV_KEY = 'KOZOU_DESKTOP_DB_URL';
@@ -40,17 +41,20 @@ async function handle(req: WorkerRequest): Promise<void> {
         schemas: req.schemas,
         timeoutMs: req.timeoutMs,
       });
+      const aiViews: AiViews = buildAiViews(context);
       const fullJson = JSON.stringify(context);
       const trimmed = trimContext(context as unknown as Record<string, unknown>);
       const trimmedJson = JSON.stringify(trimmed);
       result = {
         ok: true,
         context: trimmed,
+        aiViews,
         stats: {
           introspectMs: timings.introspectMs,
           buildMs: timings.buildMs,
           fullBytes: Buffer.byteLength(fullJson),
           trimmedBytes: Buffer.byteLength(trimmedJson),
+          aiViewsBytes: Buffer.byteLength(JSON.stringify(aiViews)),
         },
       };
     } catch (err) {

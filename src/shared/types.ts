@@ -43,14 +43,31 @@ export type InspectStats = {
   buildMs: number;
   /** Byte length of the full SchemaContext JSON (raw records included). */
   fullBytes: number;
-  /** Byte length of the trimmed JSON actually sent to the renderer. */
+  /** Byte length of the trimmed context JSON sent to the renderer. */
   trimmedBytes: number;
+  /** Byte length of the AI-view payloads riding the same IPC message —
+   *  counted separately so "sent" reporting stays honest. */
+  aiViewsBytes: number;
+};
+
+/** What the AI receives from the MCP describe tools of a default-configured
+ *  kozou server: the same pure functions, serialized through the server's own
+ *  `successResult` (constructive identity — see worker/aiViews.ts, including
+ *  the fidelity boundary for server-side opt-ins). Keyed by qualified name
+ *  (concepts by concept name; functions is the single describe_functions
+ *  payload). */
+export type AiViews = {
+  tables: Record<string, string>;
+  views: Record<string, string>;
+  concepts: Record<string, string>;
+  functions: string | null;
 };
 
 export type InspectSuccess = {
   ok: true;
   /** Trimmed SchemaContext (rawTable/rawView/rawFunction stripped). */
   context: unknown;
+  aiViews: AiViews;
   stats: InspectStats;
 };
 

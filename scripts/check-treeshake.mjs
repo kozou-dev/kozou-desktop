@@ -3,13 +3,12 @@
 //
 //  1. The production dependency tree must not contain @kozou/api (the write
 //     surface) — checked via pnpm.
-//  2. A fully bundled worker must not contain MCP server/execution code.
-//     In M1 the worker does not import @kozou/mcp at all, so the bundle must
-//     be free of any MCP SDK marker. When the AI view lands in M2 and the
-//     worker starts importing @kozou/mcp's describe pure functions, revisit
-//     the markers: assert the `call` execution tool is tree-shaken (and if it
-//     cannot be, weaken the documented claim from "not bundled" to "no
-//     execution path is invocable" — never overstate).
+//  2. A fully bundled worker must not contain MCP server/transport or
+//     execution code. The worker imports @kozou/mcp's describe pure
+//     functions (the AI view), which legitimately pull in MCP SDK
+//     type/validation modules through the describe output schemas — measured
+//     and accepted. What must stay absent, and is asserted below: the MCP
+//     server/transport stack and every execution-path identifier.
 
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync } from 'node:fs';
@@ -51,14 +50,23 @@ execFileSync(
 );
 const bundle = readFileSync(outFile, 'utf8');
 
-// Genuine execution-path markers: these strings live in the role-switching /
-// execution runtime (@kozou/api REST writes, @kozou/mcp `call`), not in the
-// compiler. Note `allowPublicExecute` is deliberately NOT a marker — it is a
-// compile-time exposure-decision identifier inside @kozou/core (feeds
-// FunctionContext.publicCallable) and is legitimately present in a
-// describe-only bundle.
+// Genuine execution-path and server-stack markers: these identifiers live in
+// the role-switching / execution runtime (@kozou/api REST writes, @kozou/mcp
+// `call`) and in the MCP server/transport — never in the describe functions.
+// Deliberately NOT markers: `allowPublicExecute` (a compile-time
+// exposure-decision identifier inside @kozou/core) and the bare string
+// `modelcontextprotocol` (SDK type/validation modules are reachable from the
+// describe output schemas by design; docs URLs mention the name too).
+// (Module *path comments* like "// node_modules/.../startHttpServer.js" can
+// survive when tree-shaking keeps a single exported constant from a module —
+// so markers are functional identifiers, not file names.)
 const MARKERS = [
-  'modelcontextprotocol', // MCP server stack
+  // MCP server/transport stack
+  'McpServer',
+  'StreamableHTTP',
+  'createServer',
+  '"node:http"',
+  // execution runtime
   'executionRole',
   'SET LOCAL ROLE',
   'set_config',
