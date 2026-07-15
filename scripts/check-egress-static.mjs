@@ -19,22 +19,23 @@ const FORBIDDEN = new Map([
   ['XMLHttpRequest', 'no network calls from app code'],
   ['new WebSocket', 'no network calls from app code'],
   ['navigator.sendBeacon', 'telemetry beacon'],
-  ["'node:http", 'Node HTTP client/server is network capability'],
-  ['"node:http', 'Node HTTP client/server is network capability'],
-  ["'node:net", 'raw sockets are network capability'],
-  ['"node:net', 'raw sockets are network capability'],
-  ["'node:tls", 'raw TLS sockets are network capability'],
-  ['"node:tls', 'raw TLS sockets are network capability'],
-  ["'node:dgram", 'UDP sockets are network capability'],
-  ['"node:dgram', 'UDP sockets are network capability'],
   ['session.fetch', "Electron's session-level fetch bypasses the renderer CSP"],
   ['net.fetch', "Electron's net.fetch bypasses the renderer CSP"],
+  ['net.request', "Electron's net.request is network capability"],
   ['shell.openExternal', 'no external navigation paths in M1 (reintroduce with an allowlist when docs links land)'],
 ]);
 
-// `import { net } from 'electron'` would not hit a simple token — catch it
-// structurally (covers aliased destructuring like `net as anything`).
-const ELECTRON_NET_IMPORT_RE = /import\s*(?:type\s*)?{[^}]*\bnet\b[^}]*}\s*from\s*['"]electron['"]/;
+// Network-capable module specifiers — matched as whole import/require
+// specifiers so both the `node:` prefix and the bare form are caught.
+const NETWORK_MODULES = ['http', 'https', 'http2', 'net', 'tls', 'dgram'];
+const NETWORK_MODULE_RE = new RegExp(
+  `(?:from\\s*|require\\s*\\(\\s*|import\\s*\\(\\s*)['"](?:node:)?(?:${NETWORK_MODULES.join('|')})['"]`,
+);
+
+// `import { net } from 'electron'` (ESM) or `const { net } = require('electron')`
+// (CJS) would not hit a simple token — catch both structurally.
+const ELECTRON_NET_IMPORT_RE =
+  /(?:import\s*(?:type\s*)?{[^}]*\bnet\b[^}]*}\s*from\s*['"]electron['"])|(?:{[^}]*\bnet\b[^}]*}\s*=\s*require\s*\(\s*['"]electron['"]\s*\))/;
 
 const SCAN_DIRS = ['src'];
 const EXTENSIONS = new Set(['.ts', '.svelte', '.html', '.css', '.js', '.mjs', '.cjs']);
@@ -56,6 +57,9 @@ function scan(dir) {
     const text = readFileSync(full, 'utf8');
     for (const [token, why] of FORBIDDEN) {
       if (text.includes(token)) violation(`${full}: "${token}" (${why})`);
+    }
+    if (NETWORK_MODULE_RE.test(text)) {
+      violation(`${full}: imports a network-capable module (http/https/http2/net/tls/dgram)`);
     }
     if (ELECTRON_NET_IMPORT_RE.test(text)) {
       violation(`${full}: imports Electron's net module (network capability)`);
@@ -85,6 +89,10 @@ if (existsSync(builtIndex)) {
       violation(`out/renderer/index.html: production CSP contains "${banned}"`);
     }
   }
+} else if (process.env.CI) {
+  // In CI the build step precedes this check; a missing artifact means the
+  // pipeline was reordered and the production CSP silently went unverified.
+  violation('out/renderer/index.html missing in CI — run the build before check:egress');
 } else {
   console.warn('note: out/renderer/index.html not found — run `pnpm build` first for the production CSP check');
 }

@@ -50,7 +50,12 @@
   }
 
   async function remove(name: string): Promise<void> {
-    profiles = await api.deleteProfile(name);
+    try {
+      profiles = await api.deleteProfile(name);
+    } catch (err) {
+      formError = message(err);
+      return;
+    }
     if (selected === name) {
       selected = null;
       result = null;

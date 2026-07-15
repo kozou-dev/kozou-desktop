@@ -1,8 +1,9 @@
-node_modules/
-out/
-dist/
+*.local
 *.log
 .DS_Store
+dist/
+node_modules/
+out/
 playwright-report/
 test-results/
-*.local
+tsconfig.node.tsbuildinfo
