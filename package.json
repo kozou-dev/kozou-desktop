@@ -1,6 +1,6 @@
 {
   "name": "kozou-desktop",
-  "version": "0.1.0-dev",
+  "version": "0.1.0-alpha.1",
   "private": true,
   "description": "kozou Desktop — Semantic Map (validation-first MVP): a read-only, cross-database visual surface for the semantic model kozou compiles from your PostgreSQL schema.",
   "license": "Apache-2.0",

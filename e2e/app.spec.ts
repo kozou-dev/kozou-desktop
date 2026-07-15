@@ -31,7 +31,8 @@ test('two profiles: map, detail pane, and AI view end-to-end', async () => {
     // concluding the form is closed — on a slow runner an immediate check
     // races the initial mount, and a blind toggle click would close the form
     // that was about to open.
-    const nameInput = page.getByPlaceholder('name');
+    // exact: the search box placeholder also contains the word "name".
+    const nameInput = page.getByPlaceholder('name', { exact: true });
     try {
       await nameInput.waitFor({ state: 'visible', timeout: 3000 });
     } catch {
@@ -82,6 +83,13 @@ test('two profiles: map, detail pane, and AI view end-to-end', async () => {
   // F1: overview cards carry counts and annotation coverage.
   await expect(page.getByTestId('card-alpha')).toContainText('tables');
   await expect(page.getByTestId('card-alpha')).toContainText('annotated');
+
+  // F4: cross-database search finds a fixture relation and jumps to it.
+  await page.getByPlaceholder(/Search all databases/).fill('customers');
+  const results = page.getByTestId('search-results');
+  await expect(results).toBeVisible();
+  await results.getByRole('button').filter({ hasText: 'public.customers' }).first().click();
+  await expect(page.getByTestId('detail-pane')).toContainText('public.customers');
 
   await app.close();
 });

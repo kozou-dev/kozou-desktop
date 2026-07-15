@@ -13,7 +13,31 @@ AI agents already see this model through kozou's MCP describe surface. Generic D
   - **Detail pane** — the full compiled semantics of a relation, including join suggestions and example queries.
   - **AI view** — the payload an AI agent receives from the MCP describe tools of a **default-configured** kozou server for that relation: same functions, same serialization. Server-side opt-ins (RPC exposure config, privilege-aware annotations) are not reproduced yet.
   - **Cross-database overview** — per-profile cards with relation counts and annotation coverage.
+  - **Cross-database search** — find a table/view by name, comment, or `@ai` note across every open database and jump to it.
 - **Is not**: a chat client (bring your own — Claude Desktop, Cursor, etc. connect to kozou over MCP), a schema editor (schema and COMMENTs stay in SQL/Git), or a general DB client.
+
+## Try it (trial build)
+
+No installer yet — run it from source (Node 22+ and [pnpm](https://pnpm.io) required):
+
+```sh
+git clone https://github.com/kozou-dev/kozou-desktop.git
+cd kozou-desktop
+pnpm install
+pnpm dev
+```
+
+Then click **+ Add database**, paste a read-only PostgreSQL connection URL
+(`postgresql://user:password@host:5432/db`), list the schemas to include, and
+press **Save profile**. Add a second database the same way and use the search
+box to move between them.
+
+Connect with a **least-privilege, read-only role**. On Supabase, do **not** use
+`service_role`/`postgres` (they bypass row-level security). The app only ever
+introspects (`SET TRANSACTION READ ONLY`); it never writes.
+
+If you are trying this at our request, see [TRIAL.md](TRIAL.md) for what
+feedback is most useful.
 
 ## Security posture
 

@@ -5,6 +5,7 @@
   import EnumsPanel from './EnumsPanel.svelte';
   import FunctionsPanel from './FunctionsPanel.svelte';
   import OverviewCards from './OverviewCards.svelte';
+  import SearchBar from './SearchBar.svelte';
   import SemanticMap from './SemanticMap.svelte';
 
   const api = window.kozouDesktop;
@@ -34,6 +35,20 @@
 
   const current = $derived(selectedProfile ? (results[selectedProfile] ?? null) : null);
   const currentContext = $derived(current?.ok ? (current.context as ContextView) : null);
+
+  // Successfully-inspected contexts, for cross-profile search.
+  const searchable = $derived.by(() => {
+    const out: Record<string, ContextView> = {};
+    for (const [name, r] of Object.entries(results)) {
+      if (r.ok) out[name] = r.context as ContextView;
+    }
+    return out;
+  });
+
+  function jumpTo(profile: string, id: string): void {
+    selectedProfile = profile;
+    selectedEntity = id;
+  }
 
   async function refresh(): Promise<void> {
     try {
@@ -148,6 +163,10 @@
     </form>
   {/if}
   {#if formError}<p class="error" data-testid="form-error">{formError}</p>{/if}
+
+  {#if Object.keys(searchable).length > 0}
+    <SearchBar contexts={searchable} onjump={jumpTo} />
+  {/if}
 
   <OverviewCards
     {profiles}
