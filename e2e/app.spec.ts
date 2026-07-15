@@ -26,11 +26,19 @@ test('two profiles: map, detail pane, and AI view end-to-end', async () => {
   const page = await app.firstWindow();
 
   for (const name of ['alpha', 'beta']) {
-    // The add form is auto-open when there are no profiles; open it otherwise.
-    if (!(await page.getByPlaceholder('name').isVisible())) {
+    // The add form auto-opens when there are no profiles; open it otherwise.
+    // isVisible() does not auto-wait, so give the auto-open a beat before
+    // concluding the form is closed — on a slow runner an immediate check
+    // races the initial mount, and a blind toggle click would close the form
+    // that was about to open.
+    const nameInput = page.getByPlaceholder('name');
+    try {
+      await nameInput.waitFor({ state: 'visible', timeout: 3000 });
+    } catch {
       await page.getByRole('button', { name: '+ Add database' }).click();
+      await nameInput.waitFor({ state: 'visible' });
     }
-    await page.getByPlaceholder('name').fill(name);
+    await nameInput.fill(name);
     await page.getByPlaceholder('postgresql://user:password@host:5432/db').fill(url!);
     await page.getByPlaceholder('schemas (comma-separated)').fill('public');
     await page.getByRole('button', { name: 'Save profile' }).click();
