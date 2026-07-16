@@ -73,6 +73,54 @@ export type WorkerRequest = {
   timeoutMs?: number;
 };
 
+/** What the MCP server worker is asked to serve (the connection URL travels
+ *  via env, never in this message and never in argv). */
+export type McpWorkerRequest = {
+  port: number;
+  mcpPath: string;
+  schemas: string[];
+};
+
+/** The MCP server worker's single startup report; after `ok: true` the
+ *  worker stays resident until the parent kills it. */
+export type McpWorkerStarted =
+  | { ok: true; port: number }
+  | { ok: false; error: string; portBusy?: boolean };
+
+/** Live state of one profile's local MCP server (registry state in main;
+ *  volatile — the store persists only the allocation and the autoStart
+ *  intent). */
+export type McpServerStatus =
+  | 'stopped'
+  | 'starting'
+  | 'running'
+  | 'stopped-crashed'
+  | 'stopped-profile-updated'
+  | 'error-port-busy'
+  | 'error'
+  | 'blocked-duplicate';
+
+export type McpStatusEntry = {
+  profile: string;
+  status: McpServerStatus;
+  /** Allocated port/path (persisted), present once assigned. */
+  port?: number;
+  path?: string;
+  autoStart: boolean;
+  /** Sanitized failure detail for error states. */
+  error?: string;
+};
+
+/** Result of a start request. 'blocked-duplicate' means a declared remote
+ *  MCP serves the same database — the renderer confirms and retries with
+ *  `override: true`. */
+export type McpStartOutcome = {
+  outcome: 'started' | 'blocked-duplicate' | 'error' | 'not-local-mode';
+  duplicates?: string[];
+  error?: string;
+  status: McpStatusEntry[];
+};
+
 export type InspectStats = {
   /** Milliseconds spent in @kozou/introspect (queries against pg_catalog). */
   introspectMs: number;
@@ -123,6 +171,15 @@ export type KozouDesktopApi = {
   saveProfile(input: ProfileInput): Promise<ProfileView[]>;
   deleteProfile(name: string): Promise<ProfileView[]>;
   inspect(name: string): Promise<InspectResult>;
+  mcpModeGet(): Promise<McpMode>;
+  mcpModeSet(mode: McpMode): Promise<McpMode>;
+  mcpStart(name: string, opts?: { override?: boolean }): Promise<McpStartOutcome>;
+  mcpStop(name: string): Promise<McpStatusEntry[]>;
+  mcpStatus(): Promise<McpStatusEntry[]>;
+  mcpReassignPort(name: string): Promise<McpStatusEntry[]>;
+  /** Subscribe to status pushes (server exit, restore progress). Returns an
+   *  unsubscribe function. */
+  onMcpStatusChanged(listener: (entries: McpStatusEntry[]) => void): () => void;
 };
 
 export const IPC = {
@@ -130,4 +187,12 @@ export const IPC = {
   profilesSave: 'profiles:save',
   profilesDelete: 'profiles:delete',
   inspectRun: 'inspect:run',
+  mcpModeGet: 'mcp:mode-get',
+  mcpModeSet: 'mcp:mode-set',
+  mcpStart: 'mcp:start',
+  mcpStop: 'mcp:stop',
+  mcpStatus: 'mcp:status',
+  mcpReassignPort: 'mcp:reassign-port',
+  /** main -> renderer push (webContents.send), not an invoke channel. */
+  mcpStatusChanged: 'mcp:status-changed',
 } as const;

@@ -46,9 +46,9 @@ feedback is most useful.
 
 ## Security posture
 
-- **Read-only by construction**: the app runs introspection only, inside a `READ ONLY` transaction; the write-capable kozou surfaces are not part of the app's production dependency tree (verified in CI: `scripts/check-treeshake.mjs`).
-- **Zero egress**: the only network peer is your own database. No telemetry, no crash upload, no update checks, spellchecker disabled (CI-checked: `scripts/check-egress-static.mjs`; see `EGRESS.md`).
-- **Secrets**: database passwords are stored via Electron `safeStorage` (OS keychain-backed), passed to introspection workers via environment only — never argv, logs, or config files. On Linux this additionally requires a real keyring backend: the `basic_text` fallback (a hardcoded key) is rejected rather than silently accepted.
+- **Read-only by construction**: the app runs introspection only, inside a `READ ONLY` transaction; the write-capable kozou surfaces (`@kozou/api`) are not part of the app's production dependency tree (verified in CI: `scripts/check-treeshake.mjs`). The optional local MCP mode serves the describe tools only — the execution tool is neither advertised nor dispatchable, pinned by an integration test against a real database.
+- **Zero egress, loopback-only serving**: outbound, the only network peer is your own database. No telemetry, no crash upload, no update checks, spellchecker disabled (CI-checked: `scripts/check-egress-static.mjs`). By default the app opens no server and no port; the opt-in local MCP mode (default off) listens on `127.0.0.1` only, behind a per-profile secret path and a DNS-rebinding guard — see `EGRESS.md` for the exact local exposure.
+- **Secrets**: database passwords are stored via Electron `safeStorage` (OS keychain-backed), passed to workers via environment only — never argv, logs, or config files. On Linux this additionally requires a real keyring backend: the `basic_text` fallback (a hardcoded key) is rejected rather than silently accepted.
 - **Least privilege**: connect with a minimal read role. On Supabase, do **not** use `service_role`/`postgres` (they bypass RLS).
 
 ## Development
