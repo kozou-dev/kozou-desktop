@@ -4,6 +4,35 @@
 // form only, and inspect results carry a trimmed SchemaContext (raw catalog
 // records stripped — see trim.ts).
 
+/** App-wide MCP serving mode. 'off' (the default) disables everything;
+ *  'local' lets profiles run app-managed loopback MCP servers; 'remote-only'
+ *  disables local serving and only surfaces remote declarations. A single
+ *  value, so the modes are mutually exclusive by construction. */
+export type McpMode = 'off' | 'local' | 'remote-only';
+
+/** Main-assigned local-MCP allocation for one profile. Sticky by design:
+ *  the port is assigned once and only changes on an explicit reassignment,
+ *  because AI-client configs the user has already pasted reference it. */
+export type LocalMcpAllocation = {
+  port: number;
+  /** Random capability path ("/mcp-<hex>"). Raises the bar from "any local
+   *  process can port-scan the tools" to "must read the user's files"; it is
+   *  not authentication and lands in AI-client configs in plaintext. */
+  path: string;
+  /** Start this profile's server on app launch. Set true by an explicit
+   *  start and false by an explicit stop — never toggled implicitly. */
+  autoStart: boolean;
+};
+
+/** User declaration that a remote MCP server (e.g. `kozou mcp` run
+ *  elsewhere) already serves this profile's database. Only used to warn
+ *  before starting a duplicate local server against the same database. */
+export type RemoteMcpDeclaration = {
+  declared: true;
+  /** Optional remote server URL, display-only. */
+  url?: string;
+};
+
 /** A named database profile as the renderer sees it (no secrets). */
 export type ProfileView = {
   name: string;
@@ -16,6 +45,10 @@ export type ProfileView = {
   timeoutMs?: number;
   /** Whether a password is stored (encrypted) for this profile. */
   hasPassword: boolean;
+  /** Local-MCP allocation, present once assigned (main-owned). */
+  localMcp?: LocalMcpAllocation;
+  /** Remote-MCP declaration, present when the user declared one. */
+  remoteMcp?: RemoteMcpDeclaration;
 };
 
 /** Input for creating/updating a profile. `url` may carry a password once —
@@ -27,6 +60,10 @@ export type ProfileInput = {
   url: string;
   schemas: string[];
   timeoutMs?: number;
+  /** Remote-MCP declaration. Omitted -> preserve the stored value;
+   *  `{ declared: false }` -> clear it. The local-MCP allocation is
+   *  main-owned and never part of renderer input. */
+  remoteMcp?: { declared: boolean; url?: string };
 };
 
 /** What the worker is asked to do (the connection URL travels via env,
