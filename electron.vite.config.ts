@@ -34,9 +34,10 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve(import.meta.dirname, 'src/main/index.ts'),
-          // The introspection worker ships as a sibling entry; main resolves
-          // it via import.meta.dirname at runtime (utilityProcess.fork).
+          // Workers ship as sibling entries; main resolves them via
+          // import.meta.dirname at runtime (utilityProcess.fork).
           inspectWorker: resolve(import.meta.dirname, 'src/worker/inspectWorker.ts'),
+          mcpServerWorker: resolve(import.meta.dirname, 'src/worker/mcpServerWorker.ts'),
         },
       },
     },

@@ -1,17 +1,27 @@
 #!/usr/bin/env node
-// Artifact-level read-only verification (see EGRESS.md item 7):
+// Artifact-level read-only verification (see EGRESS.md item 8):
 //
 //  1. The production dependency tree must not contain @kozou/api (the write
 //     surface) — checked via pnpm.
-//  2. A fully bundled worker must not contain MCP server/transport or
-//     execution code. The worker imports @kozou/mcp's describe pure
-//     functions (the AI view), which legitimately pull in MCP SDK
-//     type/validation modules through the describe output schemas — measured
-//     and accepted. What must stay absent, and is asserted below: the MCP
-//     server/transport stack and every execution-path identifier.
+//  2. The fully bundled INSPECT worker must not contain MCP server/transport
+//     or execution code. It imports @kozou/mcp's describe pure functions
+//     (the AI view), which legitimately pull in MCP SDK type/validation
+//     modules through the describe output schemas — measured and accepted.
+//     What must stay absent, and is asserted below: the MCP server/transport
+//     stack and every execution-path identifier.
+//  3. The MCP SERVER worker legitimately contains the server/transport stack
+//     (that is its job) — and, because @kozou/mcp's server module statically
+//     imports its runtime-gated execution and OAuth code, the execution
+//     identifiers are present in that bundle too, unreachable without the
+//     opt-in options. A bundle scan therefore cannot prove read-only there.
+//     Instead: a SOURCE tripwire asserts the worker never constructs the
+//     execution/OAuth options (the only way to arm those code paths), and
+//     the runtime integration test (test/mcpServer.integration.test.ts)
+//     asserts the served tool list has no execution tool and that forcing it
+//     is refused.
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -30,7 +40,7 @@ if (hasApi) {
 }
 console.log('dependency tree: no @kozou/api in production deps');
 
-// -- 2. bundled-worker check -------------------------------------------------
+// -- 2. bundled inspect-worker check ------------------------------------------
 const outDir = mkdtempSync(join(tmpdir(), 'kozou-desktop-treeshake-'));
 const outFile = join(outDir, 'worker.bundle.js');
 execFileSync(
@@ -75,7 +85,40 @@ const MARKERS = [
 ];
 const found = MARKERS.filter((m) => bundle.includes(m));
 if (found.length > 0) {
-  console.error(`BUNDLE VIOLATION: markers present in worker bundle: ${found.join(', ')}`);
+  console.error(`BUNDLE VIOLATION: markers present in inspect worker bundle: ${found.join(', ')}`);
   process.exit(1);
 }
-console.log(`worker bundle: clean (${(bundle.length / 1024).toFixed(0)} KiB, markers absent)`);
+console.log(`inspect worker bundle: clean (${(bundle.length / 1024).toFixed(0)} KiB, markers absent)`);
+
+// -- 3. worker source tripwire -------------------------------------------------
+// The execution capability and the OAuth resource-server mode are armed
+// exclusively through two option keys passed to startHttpServer. The worker
+// directory is the only place the app talks to @kozou/mcp's server, so a
+// source scan over ALL worker sources is a meaningful tripwire (the
+// load-bearing guarantee is the runtime integration test — see the header
+// comment). Patterns cover the construction shapes: explicit key,
+// assignment, object shorthand, and quoted/computed keys.
+const workerDir = join(ROOT, 'src/worker');
+const workerFiles = readdirSync(workerDir).filter((f) => f.endsWith('.ts'));
+const FORBIDDEN_SOURCE_PATTERNS = [
+  { re: /\bexecution\s*[:=]/, label: 'execution option construction' },
+  { re: /\bauth\s*[:=]/, label: 'OAuth option construction' },
+  { re: /[{,]\s*execution\s*[,}]/, label: 'execution shorthand option' },
+  { re: /[{,]\s*auth\s*[,}]/, label: 'OAuth shorthand option' },
+  { re: /['"]execution['"]/, label: 'quoted/computed execution key' },
+  { re: /['"]auth['"]/, label: 'quoted/computed OAuth key' },
+  { re: /McpExecution/, label: 'execution type import' },
+  { re: /McpHttpAuthOptions/, label: 'OAuth type import' },
+];
+const sourceViolations = [];
+for (const file of workerFiles) {
+  const text = readFileSync(join(workerDir, file), 'utf8');
+  for (const { re, label } of FORBIDDEN_SOURCE_PATTERNS) {
+    if (re.test(text)) sourceViolations.push(`src/worker/${file}: ${label} (${re})`);
+  }
+}
+if (sourceViolations.length > 0) {
+  console.error(`SOURCE VIOLATION: worker source constructs a forbidden option:\n  ${sourceViolations.join('\n  ')}`);
+  process.exit(1);
+}
+console.log(`worker sources (${workerFiles.length} files): no execution/OAuth option construction`);
