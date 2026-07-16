@@ -6,8 +6,9 @@
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ProfileInput, ProfileView } from '../shared/types.js';
+import type { LocalMcpAllocation, McpMode, ProfileInput, ProfileView, RemoteMcpDeclaration } from '../shared/types.js';
 import { joinDbUrl, splitDbUrl } from '../shared/url.js';
+import { generateMcpPath, nextFreePort } from './mcpAllocation.js';
 
 export type Encryptor = {
   available(): boolean;
@@ -27,9 +28,36 @@ type StoredProfile = {
   timeoutMs?: number;
   /** Encrypted password blob (absent when the URL carried no password). */
   encryptedPassword?: string;
+  /** Local-MCP allocation (main-owned; preserved across renderer upserts). */
+  localMcp?: LocalMcpAllocation;
+  /** Remote-MCP declaration (user-owned via the profile form). */
+  remoteMcp?: RemoteMcpDeclaration;
 };
 
-type StoreFile = { version: 1; profiles: StoredProfile[] };
+// The store stays at version 1 with additive optional fields: a version bump
+// would make the file corrupt-equivalent to older builds sharing the same
+// userData (their read() would back it up and start empty). Older builds
+// preserve unknown top-level keys on write; editing a profile there drops
+// only that profile's mcp fields.
+//
+// mcpMode (an app-wide setting) rides this file deliberately: one atomic
+// store keeps the older-build compatibility analysis in a single place.
+type StoreFile = { version: 1; mcpMode?: McpMode; profiles: StoredProfile[] };
+
+/** Accept an on-disk localMcp only when its shape is valid; junk (a
+ *  hand-edited or corrupted file) degrades to "absent" so allocation
+ *  self-heals — the same philosophy as mcpMode falling back to 'off'.
+ *  Guards downstream too: a string port would silently fail to reserve its
+ *  numeric twin here and would make net.Server.listen treat it as a pipe
+ *  name later. */
+function sanitizeLocalMcp(x: unknown): LocalMcpAllocation | undefined {
+  if (typeof x !== 'object' || x === null) return undefined;
+  const a = x as Record<string, unknown>;
+  if (!Number.isInteger(a.port) || (a.port as number) < 1 || (a.port as number) > 65_535) return undefined;
+  if (typeof a.path !== 'string' || !a.path.startsWith('/mcp-')) return undefined;
+  if (typeof a.autoStart !== 'boolean') return undefined;
+  return { port: a.port as number, path: a.path, autoStart: a.autoStart };
+}
 
 const PROFILE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
@@ -62,6 +90,34 @@ export function validateProfileInput(input: unknown): ProfileInput {
     // (per-statement budget x statement count) into hours.
     throw new Error(`timeoutMs must be a positive integer <= ${MAX_TIMEOUT_MS}`);
   }
+  let remoteMcp: ProfileInput['remoteMcp'];
+  if (p.remoteMcp !== undefined) {
+    if (typeof p.remoteMcp !== 'object' || p.remoteMcp === null) {
+      throw new Error('remoteMcp must be an object');
+    }
+    const r = p.remoteMcp as Record<string, unknown>;
+    if (typeof r.declared !== 'boolean') throw new Error('remoteMcp.declared must be a boolean');
+    if (r.url !== undefined) {
+      if (typeof r.url !== 'string' || r.url === '') {
+        throw new Error('remoteMcp.url must be a non-empty string when present');
+      }
+      let parsed: URL;
+      try {
+        parsed = new URL(r.url);
+      } catch {
+        throw new Error('remoteMcp.url must be a valid http(s) URL');
+      }
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new Error('remoteMcp.url must be a valid http(s) URL');
+      }
+      // profiles.json holds only non-secret fields — never store userinfo
+      // credentials pasted into a remote URL.
+      if (parsed.username !== '' || parsed.password !== '') {
+        throw new Error('remoteMcp.url must not contain credentials');
+      }
+    }
+    remoteMcp = { declared: r.declared, ...(r.url !== undefined ? { url: r.url as string } : {}) };
+  }
   return {
     name: p.name,
     ...(typeof p.label === 'string' && p.label !== '' ? { label: p.label } : {}),
@@ -69,6 +125,7 @@ export function validateProfileInput(input: unknown): ProfileInput {
     url: p.url,
     schemas: p.schemas,
     ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs as number } : {}),
+    ...(remoteMcp !== undefined ? { remoteMcp } : {}),
   };
 }
 
@@ -118,6 +175,8 @@ export class ProfileStore {
       schemas: p.schemas,
       timeoutMs: p.timeoutMs,
       hasPassword: p.encryptedPassword !== undefined,
+      localMcp: sanitizeLocalMcp(p.localMcp),
+      remoteMcp: p.remoteMcp,
     }));
   }
 
@@ -134,6 +193,20 @@ export class ProfileStore {
       }
       encryptedPassword = this.encryptor.encrypt(password);
     }
+    const data = this.read();
+    const i = data.profiles.findIndex((p) => p.name === input.name);
+    const existing = i >= 0 ? data.profiles[i] : undefined;
+    // The local-MCP allocation is main-owned: renderer input never carries
+    // it, so an edit must not drop it. The remote declaration follows the
+    // input when present ({ declared: false } clears) and is preserved when
+    // the input omits it.
+    const preservedLocalMcp = sanitizeLocalMcp(existing?.localMcp);
+    const remoteMcp: RemoteMcpDeclaration | undefined =
+      input.remoteMcp === undefined
+        ? existing?.remoteMcp
+        : input.remoteMcp.declared
+          ? { declared: true, ...(input.remoteMcp.url !== undefined ? { url: input.remoteMcp.url } : {}) }
+          : undefined;
     const next: StoredProfile = {
       name: input.name,
       ...(input.label ? { label: input.label } : {}),
@@ -142,9 +215,9 @@ export class ProfileStore {
       schemas: input.schemas,
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
       ...(encryptedPassword !== undefined ? { encryptedPassword } : {}),
+      ...(preservedLocalMcp !== undefined ? { localMcp: preservedLocalMcp } : {}),
+      ...(remoteMcp !== undefined ? { remoteMcp } : {}),
     };
-    const data = this.read();
-    const i = data.profiles.findIndex((p) => p.name === input.name);
     if (i >= 0) data.profiles[i] = next;
     else data.profiles.push(next);
     this.write(data);
@@ -162,10 +235,88 @@ export class ProfileStore {
   /** Rebuild the full connection URL (with password) for spawning a worker.
    *  Callers must keep it out of argv and logs. */
   connectionUrl(name: string): { url: string; schemas: string[]; timeoutMs?: number } {
-    if (typeof name !== 'string') throw new Error('profile name must be a string');
-    const p = this.read().profiles.find((x) => x.name === name);
-    if (!p) throw new Error(`unknown profile "${name}"`);
+    const data = this.read();
+    const p = this.findProfile(data, name);
     const password = p.encryptedPassword !== undefined ? this.encryptor.decrypt(p.encryptedPassword) : null;
     return { url: joinDbUrl(p.url, password), schemas: p.schemas, timeoutMs: p.timeoutMs };
+  }
+
+  /** App-wide MCP mode. Junk on disk degrades to 'off' — the safe default. */
+  mcpMode(): McpMode {
+    const raw = this.read().mcpMode;
+    return raw === 'local' || raw === 'remote-only' ? raw : 'off';
+  }
+
+  setMcpMode(mode: unknown): McpMode {
+    if (mode !== 'off' && mode !== 'local' && mode !== 'remote-only') {
+      throw new Error('mcpMode must be one of "off" | "local" | "remote-only"');
+    }
+    const data = this.read();
+    data.mcpMode = mode;
+    this.write(data);
+    return mode;
+  }
+
+  /** The profile's local-MCP allocation, assigning port + capability path on
+   *  first use (a shape-invalid stored value counts as absent and is
+   *  replaced). Sticky: a valid existing allocation is returned unchanged —
+   *  see reassignLocalMcpPort for the explicit user path. A fresh capability
+   *  path is generated per allocation and never reused across profiles, so a
+   *  recycled port never answers on a stale path. */
+  ensureLocalMcpAllocation(name: string): LocalMcpAllocation {
+    const data = this.read();
+    const p = this.findProfile(data, name);
+    const current = sanitizeLocalMcp(p.localMcp);
+    if (current !== undefined) return current;
+    p.localMcp = { port: nextFreePort(this.takenPorts(data)), path: generateMcpPath(), autoStart: false };
+    this.write(data);
+    return p.localMcp;
+  }
+
+  /** Explicitly move a profile to the next free port (user action after an
+   *  "address in use" start failure). Keeps the capability path so only the
+   *  port changes in any config the user re-copies. */
+  reassignLocalMcpPort(name: string): LocalMcpAllocation {
+    const data = this.read();
+    const p = this.findProfile(data, name);
+    const current = sanitizeLocalMcp(p.localMcp);
+    const path = current?.path ?? generateMcpPath();
+    const autoStart = current?.autoStart ?? false;
+    // The current port is part of takenPorts, so the result always differs.
+    p.localMcp = { port: nextFreePort(this.takenPorts(data)), path, autoStart };
+    this.write(data);
+    return p.localMcp;
+  }
+
+  /** Record the launch-time intent for this profile's local server. Set by
+   *  explicit start (true) / stop (false) only. Stopping a never-allocated
+   *  profile is a no-op — it must not burn a sticky port slot just to
+   *  record the default. */
+  setLocalMcpAutoStart(name: string, autoStart: boolean): LocalMcpAllocation | undefined {
+    if (typeof autoStart !== 'boolean') throw new Error('autoStart must be a boolean');
+    const data = this.read();
+    const p = this.findProfile(data, name);
+    const current = sanitizeLocalMcp(p.localMcp);
+    if (current === undefined) {
+      if (!autoStart) return undefined;
+      p.localMcp = { port: nextFreePort(this.takenPorts(data)), path: generateMcpPath(), autoStart };
+    } else {
+      p.localMcp = { ...current, autoStart };
+    }
+    this.write(data);
+    return p.localMcp;
+  }
+
+  private takenPorts(data: StoreFile): number[] {
+    return data.profiles
+      .map((p) => sanitizeLocalMcp(p.localMcp)?.port)
+      .filter((port): port is number => port !== undefined);
+  }
+
+  private findProfile(data: StoreFile, name: string): StoredProfile {
+    if (typeof name !== 'string') throw new Error('profile name must be a string');
+    const p = data.profiles.find((x) => x.name === name);
+    if (!p) throw new Error(`unknown profile "${name}"`);
+    return p;
   }
 }
