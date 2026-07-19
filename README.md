@@ -44,6 +44,29 @@ introspects (`SET TRANSACTION READ ONLY`); it never writes.
 If you are trying this at our request, see [TRIAL.md](TRIAL.md) for what
 feedback is most useful.
 
+## Local unsigned build
+
+To run it as a real `.app` instead of from a terminal, build one locally.
+The build is **unsigned** (no Apple Developer ID, no notarization) and
+**Apple-silicon only** (`arm64`):
+
+```sh
+pnpm install
+pnpm dist
+```
+
+This produces `dist/mac-arm64/Kozou.app`. Drag it into `/Applications`
+(or run it in place). Since you built it locally it launches directly — a
+self-built app carries no Gatekeeper quarantine — and appears as **Kozou**
+in the Dock and Spotlight.
+
+If you instead copy `Kozou.app` to *another* Mac, macOS quarantines it
+(it is unsigned): open it once with **right-click → Open**, or clear the
+flag with `xattr -dr com.apple.quarantine /Applications/Kozou.app`.
+
+This is a convenience build for local validation. Nothing is distributed:
+no signing, notarization, auto-update, or published binaries are in scope.
+
 ## Security posture
 
 - **Read-only by construction**: the app runs introspection only, inside a `READ ONLY` transaction; the write-capable kozou surfaces (`@kozou/api`) are not part of the app's production dependency tree (verified in CI: `scripts/check-treeshake.mjs`). The optional local MCP mode serves the describe tools only — the execution tool is neither advertised nor dispatchable, pinned by an integration test against a real database.

@@ -1,0 +1,29 @@
+# Local, unsigned macOS build for hands-on validation — see the "Local
+# unsigned build" section in README.md. Scope is deliberately minimal:
+# arm64 only, no code signing, no notarization, no auto-update, no CI
+# publish. Those stay out of scope until a real distribution decision.
+#
+# The app's *runtime* identity (userData dir, keychain service, single-
+# instance lock) is pinned in src/main/index.ts via app.setName. The
+# productName below only sets the *display* name (Dock / Spotlight / the
+# .app bundle name); it does not change the runtime identity.
+appId: org.kozou.desktop
+productName: Kozou
+directories:
+  output: dist
+# Ship only the built output and the manifest. Production node_modules are
+# resolved and included automatically from the dependency tree; dev
+# dependencies (electron, electron-builder, the bundled-in MCP SDK, etc.)
+# are pruned. The main/worker code is bundled into out/ by electron-vite.
+files:
+  - out/**
+  - package.json
+asar: true
+mac:
+  category: public.app-category.developer-tools
+  # Unsigned, ad-hoc: no Developer ID identity is used or auto-discovered.
+  identity: null
+  target:
+    - target: dir
+      arch:
+        - arm64

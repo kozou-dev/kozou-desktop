@@ -14,6 +14,20 @@ import { runInspectWorker } from './inspectRunner.js';
 import { McpServerManager } from './mcpServerManager.js';
 import { ProfileStore, validateProfileInput, type Encryptor } from './profileStore.js';
 
+// Pin the machine-facing identity to a stable slug. userData, the keychain
+// service name (safeStorage), and the single-instance lock scope all derive
+// from app.getName() — keeping it fixed here decouples them from the
+// human-facing display name. The packaged build shows "Kozou" in Dock/
+// Spotlight via CFBundleDisplayName (electron-builder productName); because
+// getName() stays "kozou-desktop", a future rename or localization of that
+// display name never strands a user's profiles or keychain entries. As a
+// side effect the packaged app and a source-run (`pnpm start`) share one
+// store — intended for now; a dev-only "-dev" suffix can split them later
+// without changing the packaged identity. Must run before anything derives a
+// path from the name — the single-instance lock (below) and the profile store
+// (in whenReady) both do.
+app.setName('kozou-desktop');
+
 // Test hooks (dev/e2e only): a packaged app must never honor env overrides —
 // ELECTRON_RENDERER_URL with the preload bridge attached would hand the
 // kozouDesktop API to an arbitrary page.
