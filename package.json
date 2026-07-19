@@ -18,7 +18,8 @@
     "test:contract": "vitest run --config vitest.contract.config.ts",
     "test:e2e": "playwright test",
     "check:treeshake": "node scripts/check-treeshake.mjs",
-    "check:egress": "node scripts/check-egress-static.mjs"
+    "check:egress": "node scripts/check-egress-static.mjs",
+    "dist": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-vite build && pnpm check:treeshake && pnpm check:egress && electron-builder --mac --arm64"
   },
   "dependencies": {
     "@kozou/core": "^1.15.1",
@@ -31,6 +32,7 @@
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
     "@types/node": "^24.0.0",
     "electron": "^37.0.0",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^3.1.0",
     "elkjs": "^0.11.1",
     "esbuild": "^0.25.0",
