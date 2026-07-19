@@ -20,7 +20,7 @@ import type { HttpServerHandle } from '@kozou/mcp';
 const url = process.env.KOZOU_TEST_DATABASE_URL;
 const MCP_PATH = '/mcp-0123456789abcdef0123456789abcdef';
 
-/** The complete always-on tool set of a describe-only kozou MCP server. */
+/** The complete always-on tool set of a read-only (describe-scope) kozou MCP server. */
 const DESCRIBE_TOOLS = [
   'describe_functions',
   'describe_table',
@@ -29,6 +29,7 @@ const DESCRIBE_TOOLS = [
   'list_concepts',
   'list_tables',
   'list_views',
+  'search_schema',
 ];
 
 function rawPost(

@@ -21,9 +21,9 @@
     "check:egress": "node scripts/check-egress-static.mjs"
   },
   "dependencies": {
-    "@kozou/core": "^1.14.0",
-    "@kozou/introspect": "^1.14.0",
-    "@kozou/mcp": "^1.14.0"
+    "@kozou/core": "^1.15.1",
+    "@kozou/introspect": "^1.15.1",
+    "@kozou/mcp": "^1.15.1"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -35,7 +35,7 @@
     "elkjs": "^0.11.1",
     "esbuild": "^0.25.0",
     "eslint": "^9.20.0",
-    "kozou": "1.14.0",
+    "kozou": "1.15.1",
     "svelte": "^5.20.0",
     "svelte-check": "^4.1.0",
     "typescript": "^5.7.0",

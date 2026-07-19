@@ -9,14 +9,14 @@ importers:
   .:
     dependencies:
       '@kozou/core':
-        specifier: ^1.14.0
-        version: 1.14.0
+        specifier: ^1.15.1
+        version: 1.15.1
       '@kozou/introspect':
-        specifier: ^1.14.0
-        version: 1.14.0
+        specifier: ^1.15.1
+        version: 1.15.1
       '@kozou/mcp':
-        specifier: ^1.14.0
-        version: 1.14.0
+        specifier: ^1.15.1
+        version: 1.15.1
     devDependencies:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
@@ -46,8 +46,8 @@ importers:
         specifier: ^9.20.0
         version: 9.39.5
       kozou:
-        specifier: 1.14.0
-        version: 1.14.0(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@5.1.1(svelte@5.56.5(@typescript-eslint/types@8.64.0))(vite@6.4.3(@types/node@24.13.3)(yaml@2.9.0)))(svelte@5.56.5(@typescript-eslint/types@8.64.0))(typescript@5.9.3)(vite@6.4.3(@types/node@24.13.3)(yaml@2.9.0)))(@types/json-schema@7.0.15)(svelte@5.56.5(@typescript-eslint/types@8.64.0))(tailwindcss@4.3.2)(typescript@5.9.3)
+        specifier: 1.15.1
+        version: 1.15.1(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@5.1.1(svelte@5.56.5(@typescript-eslint/types@8.64.0))(vite@6.4.3(@types/node@24.13.3)(yaml@2.9.0)))(svelte@5.56.5(@typescript-eslint/types@8.64.0))(typescript@5.9.3)(vite@6.4.3(@types/node@24.13.3)(yaml@2.9.0)))(@types/json-schema@7.0.15)(svelte@5.56.5(@typescript-eslint/types@8.64.0))(tailwindcss@4.3.2)(typescript@5.9.3)
       svelte:
         specifier: ^5.20.0
         version: 5.56.5(@typescript-eslint/types@8.64.0)
@@ -417,24 +417,24 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
-  '@kozou/api@1.14.0':
-    resolution: {integrity: sha512-jYq9KzkwpS6/fZMlCdHU1Gcrt4qUAuA9lsNjXV2lgd16yz9r44fnmizk8YwCrqToOexadOVHKDYOgf/7G1X+Rw==}
+  '@kozou/api@1.15.1':
+    resolution: {integrity: sha512-sudyalL8I+RcnY5zXgIuejJiRb93gadOYbryMtbN1MBep78/XOaYXA5J1ydi6kW3oOSsZWv+w0gpSH3zeYxGIA==}
 
-  '@kozou/core@1.14.0':
-    resolution: {integrity: sha512-vxHd8Ph5WE4UXcxn/UlIiHFbNoANbdb4NC/xXvuf93ks4FBjFfrKcCTwQoicZB63EuXEg/Y7foMR+8FvP400hw==}
+  '@kozou/core@1.15.1':
+    resolution: {integrity: sha512-X0dicyxyqkaCPbDH5iVQ3oZQwjI1WgcWHyyoNVE142BJKSn/UX1a9r3EunxPxkKF8taM4LbWGa3fYSUY01xfvw==}
 
-  '@kozou/introspect@1.14.0':
-    resolution: {integrity: sha512-/PntAKSWAkKWIp7our2XhJ+OyHsRI9SgxK5mCqr6to3iLhe4E1HrAlJ3hWyFfpkOnoNHgFzDKaii0p9poSOLzg==}
+  '@kozou/introspect@1.15.1':
+    resolution: {integrity: sha512-YjPdXSmuZ7mbCcRCD6/Sqz8OMsWZl2yCu2QqqhM0kGG28tmma8J1bN0IVjPT4ei1hL/ZMiT4XbYZrsV7Iq8j4g==}
 
-  '@kozou/mcp@1.14.0':
-    resolution: {integrity: sha512-4h43u960b2wLtAizwbqsTidCEO/2fmDunMNhNYV7/HBPnCZxFddPWWLMw7O5NoGGMM/wd1xv/CYtiT+EoU//5A==}
+  '@kozou/mcp@1.15.1':
+    resolution: {integrity: sha512-fDFaFLFfmbv44cPpgrE1EBdKqGChR2YHzcNhDWqAjdIhmi0LS9ik3nTj/GInpsy2rTLNEgvv3zxGWz5GAZkdhw==}
     hasBin: true
 
-  '@kozou/svelte-ui@1.14.0':
-    resolution: {integrity: sha512-uZnnz8TR16ayaQ4dHfC1eJlDn+w6sg7/rMt+RggPzpDXWCoBP8lKOJIHqzfpThw8363Kyh82w2I2jY7IuDad4A==}
+  '@kozou/svelte-ui@1.15.1':
+    resolution: {integrity: sha512-yvdxChc8uHWm/UAykFNmUAY1aWR5a9GF7i0aR3BurIrws1WEqqpT5e67mfG7i9Sgmpu6rHVuo/vUHidWqQsADw==}
 
-  '@kozou/ui-core@1.14.0':
-    resolution: {integrity: sha512-wLtkbqcvIhwtJ97PUEy27po4Avz7jvNTIz1x3YS9x6ctpYENEwaKNWaTa7DnUI1jyieF8jL1QilmRvebEAepzA==}
+  '@kozou/ui-core@1.15.1':
+    resolution: {integrity: sha512-nhmnHmdtbblD6IzyUdAgdaL0XWk4YFnc0mfxIEMBK2NkzAqRc1420pJR1/7fYr1UHlbaM5rOBJ7w4lNin+Pm+Q==}
 
   '@lucide/svelte@1.24.0':
     resolution: {integrity: sha512-yXwewA7ANQ5hfaSDrvsecosWjZn5RglzeXUZRSnxeANBskpNwblOkEJTqD0ujDdNKIKL8E9eVc2U/P3ziJr7OA==}
@@ -1516,8 +1516,8 @@ packages:
     resolution: {integrity: sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ==}
     engines: {node: '>=6'}
 
-  kozou@1.14.0:
-    resolution: {integrity: sha512-P5S8yo8ZPb/KRwZXlj/QBr0V9RfuYrwvQDAhoMzAUIiQRFNg5FlCPACSpYLcisU/knKu9gWcBTBXlj0kGIOcVg==}
+  kozou@1.15.1:
+    resolution: {integrity: sha512-4Y/2QtqDOSGyOrWbwY6sbUMqrzysVWBK5HEq3XJOnRa9jY87ZmySAgT408oGhH6ExIk+6pQiFBf7kLKj4PlwCQ==}
     hasBin: true
 
   levn@0.4.1:
@@ -2592,30 +2592,30 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@kozou/api@1.14.0':
+  '@kozou/api@1.15.1':
     dependencies:
-      '@kozou/core': 1.14.0
+      '@kozou/core': 1.15.1
       pg: 8.22.0
     transitivePeerDependencies:
       - pg-native
 
-  '@kozou/core@1.14.0':
+  '@kozou/core@1.15.1':
     dependencies:
       jose: 6.2.3
       yaml: 2.9.0
       zod: 4.4.3
 
-  '@kozou/introspect@1.14.0':
+  '@kozou/introspect@1.15.1':
     dependencies:
-      '@kozou/core': 1.14.0
+      '@kozou/core': 1.15.1
       pg: 8.22.0
     transitivePeerDependencies:
       - pg-native
 
-  '@kozou/mcp@1.14.0':
+  '@kozou/mcp@1.15.1':
     dependencies:
-      '@kozou/core': 1.14.0
-      '@kozou/introspect': 1.14.0
+      '@kozou/core': 1.15.1
+      '@kozou/introspect': 1.15.1
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
       pg: 8.22.0
       zod: 4.4.3
@@ -2624,12 +2624,12 @@ snapshots:
       - pg-native
       - supports-color
 
-  '@kozou/svelte-ui@1.14.0(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@5.1.1(svelte@5.56.5(@typescript-eslint/types@8.64.0))(vite@6.4.3(@types/node@24.13.3)(yaml@2.9.0)))(svelte@5.56.5(@typescript-eslint/types@8.64.0))(typescript@5.9.3)(vite@6.4.3(@types/node@24.13.3)(yaml@2.9.0)))(@types/json-schema@7.0.15)(svelte@5.56.5(@typescript-eslint/types@8.64.0))(tailwindcss@4.3.2)(typescript@5.9.3)':
+  '@kozou/svelte-ui@1.15.1(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@5.1.1(svelte@5.56.5(@typescript-eslint/types@8.64.0))(vite@6.4.3(@types/node@24.13.3)(yaml@2.9.0)))(svelte@5.56.5(@typescript-eslint/types@8.64.0))(typescript@5.9.3)(vite@6.4.3(@types/node@24.13.3)(yaml@2.9.0)))(@types/json-schema@7.0.15)(svelte@5.56.5(@typescript-eslint/types@8.64.0))(tailwindcss@4.3.2)(typescript@5.9.3)':
     dependencies:
       '@internationalized/date': 3.12.2
-      '@kozou/core': 1.14.0
-      '@kozou/introspect': 1.14.0
-      '@kozou/ui-core': 1.14.0
+      '@kozou/core': 1.15.1
+      '@kozou/introspect': 1.15.1
+      '@kozou/ui-core': 1.15.1
       '@lucide/svelte': 1.24.0(svelte@5.56.5(@typescript-eslint/types@8.64.0))
       '@tanstack/table-core': 8.21.3
       bits-ui: 2.18.1(@internationalized/date@3.12.2)(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@5.1.1(svelte@5.56.5(@typescript-eslint/types@8.64.0))(vite@6.4.3(@types/node@24.13.3)(yaml@2.9.0)))(svelte@5.56.5(@typescript-eslint/types@8.64.0))(typescript@5.9.3)(vite@6.4.3(@types/node@24.13.3)(yaml@2.9.0)))(svelte@5.56.5(@typescript-eslint/types@8.64.0))
@@ -2647,9 +2647,9 @@ snapshots:
       - tailwindcss
       - typescript
 
-  '@kozou/ui-core@1.14.0':
+  '@kozou/ui-core@1.15.1':
     dependencies:
-      '@kozou/core': 1.14.0
+      '@kozou/core': 1.15.1
 
   '@lucide/svelte@1.24.0(svelte@5.56.5(@typescript-eslint/types@8.64.0))':
     dependencies:
@@ -3789,13 +3789,13 @@ snapshots:
 
   kleur@4.1.5: {}
 
-  kozou@1.14.0(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@5.1.1(svelte@5.56.5(@typescript-eslint/types@8.64.0))(vite@6.4.3(@types/node@24.13.3)(yaml@2.9.0)))(svelte@5.56.5(@typescript-eslint/types@8.64.0))(typescript@5.9.3)(vite@6.4.3(@types/node@24.13.3)(yaml@2.9.0)))(@types/json-schema@7.0.15)(svelte@5.56.5(@typescript-eslint/types@8.64.0))(tailwindcss@4.3.2)(typescript@5.9.3):
+  kozou@1.15.1(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@5.1.1(svelte@5.56.5(@typescript-eslint/types@8.64.0))(vite@6.4.3(@types/node@24.13.3)(yaml@2.9.0)))(svelte@5.56.5(@typescript-eslint/types@8.64.0))(typescript@5.9.3)(vite@6.4.3(@types/node@24.13.3)(yaml@2.9.0)))(@types/json-schema@7.0.15)(svelte@5.56.5(@typescript-eslint/types@8.64.0))(tailwindcss@4.3.2)(typescript@5.9.3):
     dependencies:
-      '@kozou/api': 1.14.0
-      '@kozou/core': 1.14.0
-      '@kozou/introspect': 1.14.0
-      '@kozou/mcp': 1.14.0
-      '@kozou/svelte-ui': 1.14.0(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@5.1.1(svelte@5.56.5(@typescript-eslint/types@8.64.0))(vite@6.4.3(@types/node@24.13.3)(yaml@2.9.0)))(svelte@5.56.5(@typescript-eslint/types@8.64.0))(typescript@5.9.3)(vite@6.4.3(@types/node@24.13.3)(yaml@2.9.0)))(@types/json-schema@7.0.15)(svelte@5.56.5(@typescript-eslint/types@8.64.0))(tailwindcss@4.3.2)(typescript@5.9.3)
+      '@kozou/api': 1.15.1
+      '@kozou/core': 1.15.1
+      '@kozou/introspect': 1.15.1
+      '@kozou/mcp': 1.15.1
+      '@kozou/svelte-ui': 1.15.1(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@5.1.1(svelte@5.56.5(@typescript-eslint/types@8.64.0))(vite@6.4.3(@types/node@24.13.3)(yaml@2.9.0)))(svelte@5.56.5(@typescript-eslint/types@8.64.0))(typescript@5.9.3)(vite@6.4.3(@types/node@24.13.3)(yaml@2.9.0)))(@types/json-schema@7.0.15)(svelte@5.56.5(@typescript-eslint/types@8.64.0))(tailwindcss@4.3.2)(typescript@5.9.3)
       commander: 14.0.3
       pg: 8.22.0
       yaml: 2.9.0
