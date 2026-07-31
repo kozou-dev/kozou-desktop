@@ -38,6 +38,7 @@ export default defineConfig({
           // import.meta.dirname at runtime (utilityProcess.fork).
           inspectWorker: resolve(import.meta.dirname, 'src/worker/inspectWorker.ts'),
           mcpServerWorker: resolve(import.meta.dirname, 'src/worker/mcpServerWorker.ts'),
+          dataWorker: resolve(import.meta.dirname, 'src/worker/dataWorker.ts'),
         },
       },
     },

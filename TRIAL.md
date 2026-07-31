@@ -9,6 +9,13 @@ Please run it against **your real databases** (two or more, ideally across
 different projects) for a couple of weeks, the way you normally work. There is
 nothing to configure beyond adding your connection profiles.
 
+A least-privilege **read-only** connection role is all you need: this build only
+introspects, inside a `READ ONLY` transaction. Row data is not part of the trial
+— the app has no screen that reads or edits rows, and the per-profile opt-in
+that will unlock one (approved in a system dialog, off by default) is plumbing
+that no UI reaches yet. When it does arrive, row values will be displayed only:
+never uploaded, never written to disk, never logged.
+
 ## What we'd love to hear
 
 Open-ended — a sentence each is plenty:

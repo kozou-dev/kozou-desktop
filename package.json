@@ -22,22 +22,25 @@
     "dist": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-vite build && pnpm check:treeshake && pnpm check:egress && electron-builder --mac --arm64"
   },
   "dependencies": {
-    "@kozou/core": "^1.15.1",
-    "@kozou/introspect": "^1.15.1",
-    "@kozou/mcp": "^1.15.1"
+    "@kozou/api": "^1.17.0",
+    "@kozou/core": "^1.17.0",
+    "@kozou/introspect": "^1.17.0",
+    "@kozou/mcp": "^1.17.0",
+    "pg": "^8.13.0"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@playwright/test": "^1.50.0",
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
     "@types/node": "^24.0.0",
+    "@types/pg": "^8.20.0",
     "electron": "^37.0.0",
     "electron-builder": "^26.15.3",
     "electron-vite": "^3.1.0",
     "elkjs": "^0.11.1",
     "esbuild": "^0.25.0",
     "eslint": "^9.20.0",
-    "kozou": "1.15.1",
+    "kozou": "1.17.0",
     "svelte": "^5.20.0",
     "svelte-check": "^4.1.0",
     "typescript": "^5.7.0",

@@ -33,6 +33,10 @@ export type LocalMcpAllocation = {
  *  unaffected — it stays read-only by construction whatever this says. */
 export type RowAccess = 'off' | 'read' | 'readwrite';
 
+/** A granted row-data capability: RowAccess without the 'off' floor. This is
+ *  what a data worker is forked as, and it never changes for that process. */
+export type DataCapability = Exclude<RowAccess, 'off'>;
+
 /** User declaration that a remote MCP server (e.g. `kozou mcp` run
  *  elsewhere) already serves this profile's database. Only used to warn
  *  before starting a duplicate local server against the same database. */
@@ -84,6 +88,82 @@ export type WorkerRequest = {
   schemas: string[];
   timeoutMs?: number;
 };
+
+/** Prefix the data worker puts on every line it writes itself. It is also the
+ *  manager's allowlist: only lines carrying it are echoed to the app log, so
+ *  unexpected output from a dependency can never carry a row value into a log
+ *  (the worker's own lines are value-free by construction). Shared here so the
+ *  worker and the manager cannot drift — and so main never has to import from
+ *  a worker module, which would pull the write-capable package into its
+ *  bundle. */
+export const DATA_LOG_PREFIX = '[kozou-desktop-data]';
+
+/** Upper bound for a row-data page. Mirrors @kozou/api's `MAX_PAGE_SIZE`
+ *  without importing it: the write-capable package must stay out of the
+ *  main-process bundle (see scripts/check-treeshake.mjs), so the constant is
+ *  restated here and pinned against the real one by a unit test. */
+export const DATA_MAX_PAGE_SIZE = 200;
+
+/** List controls for a row-data browse request. Everything is optional; the
+ *  worker turns these into @kozou/api's list grammar. Deliberately a closed
+ *  shape rather than a URL or a raw query string — the renderer never composes
+ *  a request path, and main validates every field before a worker sees it. */
+export type DataListParams = {
+  /** Rows per page (1..DATA_MAX_PAGE_SIZE). */
+  pageSize?: number;
+  /** Sort spec in the kozou list grammar: `col.asc,other.desc`. */
+  sort?: string;
+  /** Opaque keyset cursors handed back by a previous page. */
+  after?: string;
+  before?: string;
+  /** Free-text search over the resource's searchable columns. */
+  search?: string;
+  /** Horizontal filters as `[column, "<op>.<value>"]` pairs (repeatable per
+   *  column, combined with AND — the same grammar the REST layer parses). */
+  filters?: [string, string][];
+};
+
+/** One row-data operation. `list`/`get` need row `read` access; the mutations
+ *  need `readwrite` — enforced in main (before a worker is reached) and again
+ *  inside the worker, whose capability is fixed at fork time. */
+export type DataOperation =
+  | { kind: 'list'; resource: string; params?: DataListParams }
+  | { kind: 'get'; resource: string; id: string }
+  | { kind: 'insert'; resource: string; values: Record<string, unknown> }
+  | { kind: 'update'; resource: string; id: string; values: Record<string, unknown> }
+  | { kind: 'delete'; resource: string; id: string };
+
+/** Stable failure vocabulary for row-data operations. Derived from the
+ *  outcome's status alone — never from the REST error body, which names
+ *  primary keys and resources (see EGRESS.md item 12). */
+export type DataErrorCode =
+  | 'bad_request'
+  | 'forbidden'
+  | 'not_found'
+  | 'conflict'
+  | 'read_only'
+  | 'unavailable'
+  | 'failed';
+
+/** Outcome of one row-data operation. `body` shapes follow @kozou/api's wire
+ *  format (a list page, or a single row). A failure carries a controlled
+ *  message: fixed text for every status except 400, whose message describes
+ *  the input the user just typed. */
+export type DataResult =
+  | { ok: true; status: number; body: unknown }
+  | { ok: false; status: number; code: DataErrorCode; message: string };
+
+/** What the data worker is asked to do. The connection URL and the capability
+ *  travel via env, never in these messages and never in argv. */
+export type DataWorkerInbound =
+  | { type: 'open'; schemas: string[]; timeoutMs?: number }
+  | { type: 'run'; id: number; op: DataOperation };
+
+/** The data worker's replies: one startup report, then one result per run. */
+export type DataWorkerOutbound =
+  | { type: 'opened'; ok: true }
+  | { type: 'opened'; ok: false; error: string }
+  | { type: 'result'; id: number; result: DataResult };
 
 /** What the MCP server worker is asked to serve (the connection URL travels
  *  via env, never in this message and never in argv). */
@@ -194,6 +274,19 @@ export type KozouDesktopApi = {
    *  resolves to the unchanged level when the user declines. Downgrades
    *  (including 'off') apply without a prompt. */
   requestRowAccess(name: string, level: RowAccess): Promise<RowAccess>;
+  /** Row-data operations. All five need the profile to be opted in — main
+   *  rejects them otherwise, before any data worker is reached. The mutations
+   *  additionally need 'readwrite'. */
+  dataList(name: string, resource: string, params?: DataListParams): Promise<DataResult>;
+  dataGet(name: string, resource: string, id: string): Promise<DataResult>;
+  dataInsert(name: string, resource: string, values: Record<string, unknown>): Promise<DataResult>;
+  dataUpdate(
+    name: string,
+    resource: string,
+    id: string,
+    values: Record<string, unknown>,
+  ): Promise<DataResult>;
+  dataDelete(name: string, resource: string, id: string): Promise<DataResult>;
   /** Subscribe to status pushes (server exit, restore progress). Returns an
    *  unsubscribe function. */
   onMcpStatusChanged(listener: (entries: McpStatusEntry[]) => void): () => void;
@@ -213,6 +306,11 @@ export const IPC = {
   /** Row-access grant requests ride their own channel, kept apart from the
    *  profile-save channel so a capability change is always an explicit act. */
   dataSetRowAccess: 'data:set-row-access',
+  dataList: 'data:list',
+  dataGet: 'data:get',
+  dataInsert: 'data:insert',
+  dataUpdate: 'data:update',
+  dataDelete: 'data:delete',
   /** main -> renderer push (webContents.send), not an invoke channel. */
   mcpStatusChanged: 'mcp:status-changed',
 } as const;
