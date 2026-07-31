@@ -11,7 +11,7 @@ import {
   validateRowId,
   validateValues,
 } from '../src/main/dataInput.js';
-import { DATA_MAX_PAGE_SIZE } from '../src/shared/types.js';
+import { DATA_MAX_CONTROL_CHARS, DATA_MAX_PAGE_SIZE } from '../src/shared/types.js';
 
 describe('row-data input validation', () => {
   it('requires string names and ids', () => {
@@ -82,6 +82,16 @@ describe('row-data input validation', () => {
     expect(() => validateListParams({ search: long })).toThrow(/4096 characters/);
     expect(() => validateListParams({ after: long })).toThrow(/4096 characters/);
     expect(() => validateListParams({ filters: [['col', long]] })).toThrow(/4096 characters/);
+  });
+
+  it('draws the control-string line exactly where the worker withholds cursors', () => {
+    // The worker refuses to hand OUT a cursor longer than DATA_MAX_CONTROL_CHARS
+    // precisely because main refuses to take one back IN. Both read one shared
+    // constant; this is what would catch a re-introduced local literal, since a
+    // limit that drifts either way means the app offers a hop it then rejects.
+    const atLimit = 'c'.repeat(DATA_MAX_CONTROL_CHARS);
+    expect(validateListParams({ after: atLimit })?.after).toBe(atLimit);
+    expect(() => validateListParams({ after: `${atLimit}c` })).toThrow(/must not exceed/);
   });
 
   it('normalizes list params and rejects out-of-range paging', () => {

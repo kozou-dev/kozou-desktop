@@ -77,6 +77,33 @@ function sanitizeRowAccess(x: unknown): 'read' | 'readwrite' | undefined {
   return x === 'read' || x === 'readwrite' ? x : undefined;
 }
 
+/** What a row-access grant is anchored to: the database the approval dialog
+ *  named, reached as the role stored for this profile, over these schemas.
+ *
+ *  Shared with rowAccessGate.ts on purpose — "what the user approved" and "what
+ *  invalidates that approval" must not drift apart. A password rotation on an
+ *  otherwise identical URL deliberately does not count (same server, same
+ *  database, same role); adding or removing a stored password does, because it
+ *  changes which credentials the grant would be exercised with.
+ *
+ *  The schema list is compared as a SET: sorted and de-duplicated for the
+ *  comparison only, leaving the stored order untouched. Order does not change
+ *  which rows are reachable — @kozou/api registers a bare relation name only
+ *  when it is unique across the introspected schemas, so a collision is
+ *  unaddressable rather than resolved by list order, and this app addresses
+ *  relations by qualified name anyway. Treating a reorder as a new database
+ *  would revoke a capability for an edit that changed nothing. */
+export function rowAccessIdentity(profile: {
+  url: string;
+  schemas: readonly string[];
+  hasPassword: boolean;
+}): string {
+  const schemas = Array.isArray(profile.schemas)
+    ? [...new Set(profile.schemas)].sort()
+    : profile.schemas;
+  return JSON.stringify([profile.url, schemas, profile.hasPassword]);
+}
+
 /** Validate an untrusted row-access level (IPC input) before it can reach
  *  the store. */
 export function validateRowAccess(level: unknown): RowAccess {
@@ -226,12 +253,30 @@ export class ProfileStore {
     const existing = i >= 0 ? data.profiles[i] : undefined;
     // The local-MCP allocation and the row-access grant are main-owned:
     // renderer input never carries them (validateProfileInput drops unknown
-    // keys), so an edit must not drop them either — renaming a profile must
-    // not silently revoke a grant the user approved in a native dialog. The
-    // remote declaration follows the input when present ({ declared: false }
-    // clears) and is preserved when the input omits it.
+    // keys), so an edit must not drop them either — losing a capability on
+    // every label edit would be poor behaviour. The remote declaration follows
+    // the input when present ({ declared: false } clears) and is preserved when
+    // the input omits it.
     const preservedLocalMcp = sanitizeLocalMcp(existing?.localMcp);
-    const preservedRowAccess = sanitizeRowAccess(existing?.rowAccess);
+    // The grant is the one exception, and only for the facts its approval was
+    // anchored to: the dialog named a database, so an edit that repoints the
+    // profile at a different one — or at different schemas, or at a different
+    // credential state — must ask again rather than carry the grant over to a
+    // record the user never saw. Label, colour and timeout edits keep it.
+    const storedRowAccess = sanitizeRowAccess(existing?.rowAccess);
+    const grantStillAnchored =
+      existing !== undefined &&
+      rowAccessIdentity({
+        url: existing.url,
+        schemas: existing.schemas,
+        hasPassword: existing.encryptedPassword !== undefined,
+      }) ===
+        rowAccessIdentity({
+          url: sansPassword,
+          schemas: input.schemas,
+          hasPassword: encryptedPassword !== undefined,
+        });
+    const preservedRowAccess = grantStillAnchored ? storedRowAccess : undefined;
     const remoteMcp: RemoteMcpDeclaration | undefined =
       input.remoteMcp === undefined
         ? existing?.remoteMcp

@@ -17,7 +17,7 @@
 // without Electron.
 
 import type { RowAccess } from '../shared/types.js';
-import { validateRowAccess, type ProfileStore } from './profileStore.js';
+import { rowAccessIdentity, validateRowAccess, type ProfileStore } from './profileStore.js';
 
 /** Asks the user to approve an escalation. Resolves true only on an explicit
  *  approval — anything else (dismissal, close, error surfaced as false) keeps
@@ -41,11 +41,15 @@ const RANK: Record<RowAccess, number> = { off: 0, read: 1, readwrite: 2 };
  *  prompt is open. Binding the approval to these facts (not to the name
  *  alone) is what keeps a grant from landing on a record the user never saw.
  *  A password rotation on an otherwise identical URL deliberately does not
- *  count: same server, same database, same role. */
+ *  count: same server, same database, same role.
+ *
+ *  The same triple is what the store drops a stored grant on when the profile
+ *  form changes it (rowAccessIdentity, shared so the two cannot drift): an
+ *  approval outlives an edit exactly as long as the facts it named hold. */
 function profileFacts(store: ProfileStore, name: string): { connection: string; identity: string } {
   const p = store.list().find((x) => x.name === name);
   if (p === undefined) throw new Error(`unknown profile "${name}"`);
-  return { connection: p.url, identity: JSON.stringify([p.url, p.schemas, p.hasPassword]) };
+  return { connection: p.url, identity: rowAccessIdentity(p) };
 }
 
 /** Handle a renderer request to change a profile's row-access level.

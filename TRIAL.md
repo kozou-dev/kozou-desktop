@@ -13,9 +13,12 @@ A least-privilege **read-only** connection role is all you need. Introspection
 runs inside a `READ ONLY` transaction, and so does row browsing — the one part
 of the app that touches row data at all. Browsing is **off for every profile**
 until you turn it on from the profile card and approve a system dialog; the card
-shows the current level either way. Row **editing** has no screen yet. Wherever
-row values are shown they are displayed only: never uploaded, never written to
-disk, never logged.
+shows the current level either way, and editing a profile's connection turns
+browsing back off so the next attempt asks again. Row **editing** has no screen
+yet. Wherever row values are shown they are displayed only: never uploaded,
+never written to disk, never logged — and large values are cut short before they
+even reach the window, so the Data tab is a preview rather than a way to read a
+big value in full.
 
 The map is what we are asking about — treat the Data tab as incidental unless
 reaching for it tells you something about the map.

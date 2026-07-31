@@ -104,6 +104,61 @@ export const DATA_LOG_PREFIX = '[kozou-desktop-data]';
  *  restated here and pinned against the real one by a unit test. */
 export const DATA_MAX_PAGE_SIZE = 200;
 
+/** Per-value budget the data worker applies to a browse page before the rows
+ *  are serialized: characters for text, bytes for a byte array, and for a
+ *  json/array/composite value an approximation of its size in the same units.
+ *  Both IPC hops carry values by structured clone, not as JSON, so a character
+ *  count is the right proxy for what a value costs on the wire (about two bytes
+ *  per code unit) — JSON escaping is not part of that cost and deliberately not
+ *  counted.
+ *
+ *  A page is up to DATA_MAX_PAGE_SIZE rows and a single column can hold an
+ *  arbitrarily large value, so without this a page could move hundreds of
+ *  megabytes through two IPC hops and hold them in the renderer for a pane that
+ *  shows a few hundred characters per cell. The cut happens in the worker,
+ *  before serialization — the worker itself still holds whatever the driver
+ *  read. */
+export const DATA_VALUE_BUDGET = 1024;
+
+/** Cap on a single control string crossing the row-data IPC: a sort spec, a
+ *  search text, or a keyset cursor. A lossless cursor over a composite key is
+ *  the longest legitimate one and stays far below this.
+ *
+ *  Load-bearing in both directions, which is why it lives here rather than in
+ *  either process: main refuses a longer one on the way in, and the worker
+ *  refuses to hand one out on the way back. A cursor encodes the boundary row's
+ *  ordering values, so a large sorted value would otherwise ride around the
+ *  per-value budget inside it — and be rejected by main on the next hop. */
+export const DATA_MAX_CONTROL_CHARS = 4_096;
+
+/** Longest cell text the browse pane renders (and puts in the tooltip). Kept
+ *  at or below DATA_VALUE_BUDGET: the pane must not promise more than the wire
+ *  carries — pinned by a unit test. */
+export const DATA_CELL_PREVIEW_CHARS = 500;
+
+/** One value the worker refused to carry in full, addressed by its position in
+ *  the page it was cut from. Reported alongside the rows rather than mixed into
+ *  them: a marker inside a row could collide with real json data, and a value
+ *  silently replaced by a smaller one is exactly the kind of claim this pane
+ *  must not make. */
+export type DataTruncation = {
+  /** Index into the page's `rows` array. */
+  row: number;
+  column: string;
+  /** How the value was cut. 'text' and 'bytes' keep a leading slice; 'json' is
+   *  replaced by null, because a partly serialized object is not a value;
+   *  'unmeasurable' is a value whose size could not be established at all
+   *  (a bigint or a cyclic structure — both fine for structured clone, both
+   *  fatal to the measuring walk), dropped because a bound that assumes
+   *  "unmeasured means small" is not a bound. */
+  kind: 'text' | 'bytes' | 'json' | 'unmeasurable';
+  /** Characters ('text') or bytes ('bytes') the worker measured. For 'json' it
+   *  is the budget the value passed — measurement stops there, so the real size
+   *  is only known to be larger. Absent for 'unmeasurable': nothing about that
+   *  value's size is known, and naming a number would be a claim. */
+  size?: number;
+};
+
 /** List controls for a row-data browse request. Everything is optional; the
  *  worker turns these into @kozou/api's list grammar. Deliberately a closed
  *  shape rather than a URL or a raw query string — the renderer never composes
@@ -150,7 +205,23 @@ export type DataErrorCode =
  *  message: fixed text for every status except 400, whose message describes
  *  the input the user just typed. */
 export type DataResult =
-  | { ok: true; status: number; body: unknown }
+  | {
+      ok: true;
+      status: number;
+      body: unknown;
+      /** Values the worker cut out of a browse page to keep it within
+       *  DATA_VALUE_BUDGET. Absent when nothing was cut, and never present for
+       *  a single-row `get`: that path carries its values in full, which is
+       *  what an editor needs and is bounded by one row rather than a page. */
+      truncated?: DataTruncation[];
+      /** Page cursors the worker withheld because they exceeded
+       *  DATA_MAX_CONTROL_CHARS. A cursor encodes the boundary row's ordering
+       *  values, so a large sorted value would otherwise carry its full length
+       *  around the per-value budget — and main would refuse the cursor on the
+       *  way back in anyway. The named direction is unreachable from this page:
+       *  the pane says so rather than offering a hop that cannot be made. */
+      droppedCursors?: ('next' | 'prev')[];
+    }
   | { ok: false; status: number; code: DataErrorCode; message: string };
 
 /** What the data worker is asked to do. The connection URL and the capability

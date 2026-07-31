@@ -274,9 +274,79 @@ describe('ProfileStore row access', () => {
     const { store } = freshStore();
     store.upsert({ name: 'a', ...base });
     store.setRowAccess('a', 'readwrite');
-    // A plain form edit must not silently revoke the grant the user approved.
-    store.upsert({ name: 'a', ...base, label: 'renamed' });
+    // A plain form edit must not silently revoke the grant the user approved:
+    // losing row access on every label edit would be poor behaviour.
+    store.upsert({ name: 'a', ...base, label: 'renamed', color: '#123456', timeoutMs: 4_000 });
     expect(store.list()[0]!.rowAccess).toBe('readwrite');
+  });
+
+  // The approval dialog names a DATABASE, so the grant lives exactly as long as
+  // the facts it named do. These four pin both directions of that rule.
+  it('drops a grant when an edit repoints the profile at another database', () => {
+    const { store, dir } = freshStore();
+    store.upsert({ name: 'a', ...base });
+    store.setRowAccess('a', 'readwrite');
+    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/other', schemas: ['public'] });
+
+    expect(store.rowAccess('a')).toBe('off');
+    expect(store.list()[0]!.rowAccess).toBe('off');
+    // Absent, not an explicit 'off' — the fail-closed state stays the shape an
+    // older build writes back.
+    const raw = JSON.parse(readFileSync(join(dir, 'profiles.json'), 'utf8'));
+    expect(raw.profiles[0]).not.toHaveProperty('rowAccess');
+  });
+
+  it('drops a grant when the schema set changes', () => {
+    const { store } = freshStore();
+    store.upsert({ name: 'a', ...base });
+    store.setRowAccess('a', 'read');
+    store.upsert({ name: 'a', url: base.url, schemas: ['public', 'sales'] });
+    expect(store.rowAccess('a')).toBe('off');
+  });
+
+  it('keeps a grant across a password rotation but not across a change of credential state', () => {
+    const { store } = freshStore();
+    store.upsert({ name: 'a', url: 'postgresql://u:old@h:5432/db', schemas: ['public'] });
+    store.setRowAccess('a', 'readwrite');
+
+    // Same server, same database, same role: nothing the user approved changed.
+    store.upsert({ name: 'a', url: 'postgresql://u:new@h:5432/db', schemas: ['public'] });
+    expect(store.rowAccess('a')).toBe('readwrite');
+
+    // Dropping the stored password changes which credentials the grant would be
+    // exercised with, so it has to be approved again.
+    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
+    expect(store.rowAccess('a')).toBe('off');
+  });
+
+  it('keeps a grant when the same schema set is merely reordered or repeated', () => {
+    const { store } = freshStore();
+    store.upsert({ name: 'a', url: base.url, schemas: ['public', 'sales'] });
+    store.setRowAccess('a', 'readwrite');
+
+    // Order does not decide which rows are reachable: a bare relation name is
+    // registered only when it is unique across the introspected schemas, and
+    // this app addresses relations by qualified name. Revoking here would cost
+    // an approval for an edit that changed nothing.
+    store.upsert({ name: 'a', url: base.url, schemas: ['sales', 'public'] });
+    expect(store.rowAccess('a')).toBe('readwrite');
+    store.upsert({ name: 'a', url: base.url, schemas: ['public', 'sales', 'public'] });
+    expect(store.rowAccess('a')).toBe('readwrite');
+
+    // Adding a schema is still a change of what the grant reaches.
+    store.upsert({ name: 'a', url: base.url, schemas: ['public', 'sales', 'ops'] });
+    expect(store.rowAccess('a')).toBe('off');
+  });
+
+  it('re-grants normally after a connection edit dropped the grant', () => {
+    const { store } = freshStore();
+    store.upsert({ name: 'a', ...base });
+    store.setRowAccess('a', 'read');
+    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/other', schemas: ['public'] });
+    expect(store.rowAccess('a')).toBe('off');
+    // The cost of the rule is one more approval, not a profile stuck at 'off'.
+    store.setRowAccess('a', 'read');
+    expect(store.rowAccess('a')).toBe('read');
   });
 
   it('degrades a junk on-disk rowAccess to off instead of propagating it', () => {

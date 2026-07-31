@@ -3,8 +3,9 @@
 // is the wiring the UI owns — the grant is legible on the card whether or not
 // it is granted, the tab is offered only when it is, the cursor handed back by
 // one page is what fetches the next, changing the sort restarts the traversal
-// instead of replaying a cursor the new ORDER BY would reject, and a page that
-// fails or comes back empty leaves a way out rather than a stranded panel.
+// instead of replaying a cursor the new ORDER BY would reject, a page that
+// fails or comes back empty leaves a way out rather than a stranded panel, and a
+// value too large for the wire is shown as cut instead of as the value.
 //
 // Requires: `pnpm build` first and a reachable PostgreSQL via
 // KOZOU_TEST_DATABASE_URL (same provisioning as app.spec.ts).
@@ -21,7 +22,7 @@ import {
   type Page,
 } from '@playwright/test';
 import { Client } from 'pg';
-import { IPC } from '../src/shared/types.js';
+import { DATA_VALUE_BUDGET, IPC } from '../src/shared/types.js';
 
 const url = process.env.KOZOU_TEST_DATABASE_URL;
 
@@ -34,6 +35,13 @@ test.skip(!url, 'KOZOU_TEST_DATABASE_URL not set');
 const SEED_PREFIX = 'e2e-browse-';
 const SEED_COUNT = 12;
 const PAGE_SIZE = 10;
+
+/** One seeded value larger than the wire budget, so the pane has something it
+ *  is unable to show in full. Its name starts with 'Bulk', which sorts above
+ *  every 'Browse NN' and below the fixture's 'Grace': it therefore lands on the
+ *  first page under `name desc` without moving either end of the sort
+ *  assertions. */
+const OVERSIZED_NAME_CHARS = DATA_VALUE_BUDGET + 500;
 
 /** Counter the dialog stubs keep in the MAIN process. Asserting on it is what
  *  makes "the prompt was declined" and "the downgrade asked nothing" claims
@@ -61,11 +69,15 @@ async function seedRows(): Promise<void> {
      FROM generate_series(1, $2) AS i`,
     [SEED_PREFIX, SEED_COUNT],
   );
+  await seeder.query(`INSERT INTO customers (name, email) VALUES ('Bulk ' || repeat('x', $1), $2)`, [
+    OVERSIZED_NAME_CHARS,
+    `${SEED_PREFIX}bulk@example.test`,
+  ]);
 }
 
 /** Cells of the first row. `id` identifies which page is on screen; `name`
  *  identifies which ORDER BY produced it. Both are asserted with retrying
- *  matchers: a control that does not change the page counter (a direction flip,
+ *  matchers: a control that does not change the step counter (a direction flip,
  *  say) would otherwise be read before its rows land. */
 function firstCell(page: Page): Locator {
   return page.getByTestId('data-grid').locator('tbody tr').first().locator('td').first();
@@ -166,14 +178,14 @@ test('data tab: gated by the grant, browses rows, and pages by cursor', async ()
 
     // --- paging walks by the cursor the previous page handed back ------------
     const position = page.getByTestId('data-position');
-    await expect(position).toContainText('page 1');
+    await expect(position).toContainText('step 1');
     await expect(page.getByTestId('data-prev')).toBeDisabled();
     await expect(page.getByTestId('data-next')).toBeEnabled();
     await expect(page.getByTestId('data-first')).toHaveCount(0);
 
     const firstOfPage1 = await firstCell(page).innerText();
     await page.getByTestId('data-next').click();
-    await expect(position).toContainText('page 2');
+    await expect(position).toContainText('step 2');
     await expect(page.getByTestId('data-error')).toHaveCount(0);
     const firstOfPage2 = await firstCell(page).innerText();
     expect(firstOfPage2).not.toBe(firstOfPage1);
@@ -181,7 +193,7 @@ test('data tab: gated by the grant, browses rows, and pages by cursor', async ()
     await expect(page.getByTestId('data-first')).toBeVisible();
 
     await page.getByTestId('data-prev').click();
-    await expect(position).toContainText('page 1');
+    await expect(position).toContainText('step 1');
     await expect(firstCell(page)).toHaveText(firstOfPage1);
 
     // --- changing the sort restarts the traversal ----------------------------
@@ -189,9 +201,9 @@ test('data tab: gated by the grant, browses rows, and pages by cursor', async ()
     // refuses a mismatch, so a sort change that kept the cursor would surface
     // as a 400 here rather than as a first page.
     await page.getByTestId('data-next').click();
-    await expect(position).toContainText('page 2');
+    await expect(position).toContainText('step 2');
     await page.getByTestId('data-sort-column').selectOption('name');
-    await expect(position).toContainText('page 1');
+    await expect(position).toContainText('step 1');
     await expect(page.getByTestId('data-error')).toHaveCount(0);
     await expect(page.getByTestId('data-prev')).toBeDisabled();
     await expect(grid.locator('tbody tr')).toHaveCount(PAGE_SIZE);
@@ -199,13 +211,20 @@ test('data tab: gated by the grant, browses rows, and pages by cursor', async ()
     // 'Ada' sorts first by name and the seeded rows all sort after it.
     await expect(firstName(page)).toHaveText('Ada');
 
-    // Flipping the direction leaves the page counter at 1, so the rows are what
+    // Flipping the direction leaves the step counter at 1, so the rows are what
     // has to be waited on here.
     await expect(page.getByTestId('data-sort-dir')).toBeEnabled();
     await page.getByTestId('data-sort-dir').selectOption('desc');
     await expect(firstName(page)).toHaveText('Grace');
-    await expect(position).toContainText('page 1');
+    await expect(position).toContainText('step 1');
     await expect(page.getByTestId('data-error')).toHaveCount(0);
+
+    // --- a value the wire will not carry is shown as cut, not as the value ---
+    // The oversized name sorts just below 'Grace', so this page holds it. The
+    // note and the badge are the whole promise: the pane is a preview, and it
+    // says which cells it could not show in full.
+    await expect(page.getByTestId('data-truncated')).toBeVisible();
+    await expect(page.getByTestId('data-cut').first()).toBeVisible();
 
     // --- a view has no primary key: one page, and the pane says why ----------
     await page.getByTestId('map-node-public.recent_orders').click();
@@ -236,7 +255,7 @@ test('data tab: gated by the grant, browses rows, and pages by cursor', async ()
     const back = page.getByTestId('data-first');
     await expect(back).toBeVisible();
     await back.click();
-    await expect(position).toContainText('page 1');
+    await expect(position).toContainText('step 1');
     await expect(grid.locator('tbody tr').first()).toBeVisible();
     await expect(back).toHaveCount(0);
     await seedRows();
@@ -291,12 +310,12 @@ test('a failed IPC leaves neither the badge nor the traversal position lying', a
     await page.getByTestId('data-page-size').selectOption(String(PAGE_SIZE));
     await expect(grid.locator('tbody tr')).toHaveCount(PAGE_SIZE);
     const position = page.getByTestId('data-position');
-    await expect(position).toContainText('page 1');
+    await expect(position).toContainText('step 1');
 
-    // --- a failed hop moves neither the page number nor the cursor -----------
+    // --- a failed hop moves neither the step counter nor the cursor -----------
     // The stub fails the first call and then answers with a canned page whose
     // first row NAMES whether a cursor was sent. That is what distinguishes the
-    // invariant under test from a page number that merely looks right: after a
+    // invariant under test from a counter that merely looks right: after a
     // failed Next, a reload must re-fetch the page the panel is showing, not
     // the page it failed to reach.
     await app.evaluate(({ ipcMain }, channel) => {
@@ -329,12 +348,41 @@ test('a failed IPC leaves neither the badge nor the traversal position lying', a
 
     await page.getByTestId('data-next').click();
     await expect(page.getByTestId('data-error')).toBeVisible();
-    await expect(position).toContainText('page 1');
+    await expect(position).toContainText('step 1');
     await expect(page.getByTestId('data-first')).toHaveCount(0);
 
     await page.getByTestId('data-reload').click();
     await expect(firstName(page)).toHaveText('no-cursor');
-    await expect(position).toContainText('page 1');
+    await expect(position).toContainText('step 1');
+
+    // --- a dropped json value must not read as a NULL ------------------------
+    // The worker replaces an oversized json value with null and reports the cut;
+    // rendering that as the NULL marker would turn "we would not carry this"
+    // into "the database has no value here". A stubbed reply is the only way to
+    // put a json cut on screen without a json column in the fixture.
+    await app.evaluate(({ ipcMain }, channel) => {
+      ipcMain.removeHandler(channel);
+      ipcMain.handle(channel, () => ({
+        ok: true,
+        status: 200,
+        body: {
+          rows: [{ id: 1, name: 'has-json', email: null, created_at: null }],
+          total: null,
+          nextCursor: null,
+          prevCursor: null,
+        },
+        truncated: [{ row: 0, column: 'email', kind: 'json', size: 1024 }],
+      }));
+    }, IPC.dataList);
+
+    await page.getByTestId('data-reload').click();
+    await expect(firstName(page)).toHaveText('has-json');
+    await expect(page.getByTestId('data-truncated')).toBeVisible();
+    const cut = page.getByTestId('data-cut');
+    await expect(cut).toHaveText('(json value too large)');
+    // The row's other null cell still renders as NULL, so this is the cut cell
+    // being told apart rather than the marker having disappeared everywhere.
+    await expect(page.getByTestId('data-grid').locator('tbody .null')).toHaveCount(1);
   } finally {
     await app.close();
   }

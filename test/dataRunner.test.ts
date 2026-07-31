@@ -25,7 +25,7 @@ import {
   type DataClient,
   type DataPool,
 } from '../src/worker/runData.js';
-import { DATA_MAX_PAGE_SIZE, type DataCapability } from '../src/shared/types.js';
+import { DATA_MAX_PAGE_SIZE, DATA_VALUE_BUDGET, type DataCapability } from '../src/shared/types.js';
 
 function column(name: string, dataType: string, extra: Partial<ColumnContext> = {}): ColumnContext {
   return {
@@ -459,5 +459,44 @@ describe('data runner transaction envelope', () => {
     expect(result.status).toBe(503);
     expect(result.code).toBe('unavailable');
     expect(written.join('')).not.toContain('s3cr3t');
+  });
+});
+
+describe('browse page budget at the runner boundary', () => {
+  const long = 'x'.repeat(DATA_VALUE_BUDGET + 10);
+
+  it('cuts an oversized value out of a list page and reports the cut', async () => {
+    const h = harness('read', [{ rows: [{ id: 1, name: long }] }]);
+    const result = await h.runner.run({ kind: 'list', resource: 'customers' });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.truncated).toEqual([
+      { row: 0, column: 'name', kind: 'text', size: long.length },
+    ]);
+    const { rows } = result.body as { rows: Record<string, unknown>[] };
+    expect((rows[0]!.name as string).length).toBe(DATA_VALUE_BUDGET);
+  });
+
+  it('reports nothing when the page is already within budget', async () => {
+    const h = harness('read', [{ rows: [{ id: 1, name: 'Ada' }] }]);
+    const result = await h.runner.run({ kind: 'list', resource: 'customers' });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.truncated).toBeUndefined();
+  });
+
+  it('hands a single-row get over in full, so an editor never writes a cut value back', async () => {
+    // The deliberate boundary of the budget: a `get` is bounded by being one
+    // row, and a form working from a cut value could write the cut back. PR4's
+    // row editor reads through this path for exactly that reason.
+    const h = harness('read', [{ rows: [{ id: 1, name: long }] }]);
+    const result = await h.runner.run({ kind: 'get', resource: 'customers', id: '1' });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.truncated).toBeUndefined();
+    expect(((result.body as Record<string, unknown>).name as string).length).toBe(long.length);
   });
 });

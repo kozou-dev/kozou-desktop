@@ -26,6 +26,11 @@
 //      400 becomes a fixed sentence. A 400 is passed through: it is either a
 //      pre-flight/constraint message or a description of the input the user
 //      just typed.
+//   5. A browse page is bounded before it is serialized. Nothing in the request
+//      grammar limits what a page weighs — 200 rows of large `text`/`jsonb`/
+//      `bytea` values is an ordinary schema away — so rowBudget.ts cuts
+//      oversized values here and every cut is reported (see rowBudget.ts for
+//      what this deliberately does not bound).
 
 import {
   buildResourceLookup,
@@ -45,6 +50,7 @@ import {
   type DataResult,
 } from '../shared/types.js';
 import { sanitizeErrorMessage } from '../shared/url.js';
+import { boundListPage } from './rowBudget.js';
 import { runInspect } from './runInspect.js';
 
 const LOG_PREFIX = DATA_LOG_PREFIX;
@@ -258,6 +264,30 @@ function toResult(result: ApiHttpResult): DataResult {
     : { ok: false, status: result.status, code: 'failed', message: GENERIC_FAILURE };
 }
 
+/** Bring a browse page within what the wire allows — the per-value budget for
+ *  the cells, and the control-string limit for the cursors — and report what was
+ *  withheld. Applied to `list` only: a `get` fetches one row and hands its
+ *  values over in full, because an editor working from a cut value could write
+ *  the cut back.
+ *
+ *  That exclusion is belt-and-braces today — a `get` body is a bare row, which
+ *  boundListPage does not touch either — and it is kept for the day the wire
+ *  shape of a single row changes upstream. Being redundant, removing it alone is
+ *  not observable in a test; test/rowBudget.test.ts says so rather than leaving
+ *  the impression that it is covered. */
+function boundForWire(op: DataOperation, result: DataResult): DataResult {
+  if (!result.ok || op.kind !== 'list') return result;
+  // boundListPage cuts the rows and clears the oversized cursors in place, so
+  // `body` is already within the limits here; what is added is the report.
+  const { cuts, droppedCursors } = boundListPage(result.body);
+  if (cuts.length === 0 && droppedCursors.length === 0) return result;
+  return {
+    ...result,
+    ...(cuts.length > 0 ? { truncated: cuts } : {}),
+    ...(droppedCursors.length > 0 ? { droppedCursors } : {}),
+  };
+}
+
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -334,7 +364,7 @@ export function createDataRunner(options: DataRunnerOptions): DataRunner {
           // a READ ONLY transaction, so a failing close does not invalidate
           // them. Report the rows, not a failure.
         }
-        return toResult(result);
+        return boundForWire(op, toResult(result));
       } catch (err) {
         // The envelope's own statements land here (the handler maps its own
         // failures into a status). A statement-phase message may quote row
