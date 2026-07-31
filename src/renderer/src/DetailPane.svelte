@@ -1,16 +1,37 @@
 <script lang="ts">
   import type { ContextView } from '../../shared/contextView';
-  import type { AiViews } from '../../shared/types';
+  import type { AiViews, RowAccess } from '../../shared/types';
+  import DataPanel from './DataPanel.svelte';
   import JsonTree from './JsonTree.svelte';
 
   let {
     context,
     aiViews,
     selected,
-  }: { context: ContextView; aiViews: AiViews; selected: string } = $props();
+    profile,
+    rowAccess,
+    epoch,
+  }: {
+    context: ContextView;
+    aiViews: AiViews;
+    selected: string;
+    profile: string;
+    /** This profile's row-data grant. 'off' hides the Data tab entirely: with
+     *  no grant, main refuses every `data:*` call, so offering the tab would
+     *  only promise something the gate would then deny. */
+    rowAccess: RowAccess;
+    /** Bumped by the app whenever a profile's identity or grant changes, so a
+     *  browse panel cannot carry cursors across that boundary. */
+    epoch: number;
+  } = $props();
 
-  type Tab = 'human' | 'ai' | 'raw';
+  type Tab = 'human' | 'ai' | 'raw' | 'data';
   let tab = $state<Tab>('human');
+
+  const canBrowse = $derived(rowAccess !== 'off');
+  // Revoking the grant while the Data tab is open must take the tab away, not
+  // leave a dead panel selected.
+  const activeTab = $derived<Tab>(tab === 'data' && !canBrowse ? 'human' : tab);
 
   const table = $derived(context.tables.find((t) => t.qualifiedName === selected) ?? null);
   const view = $derived(context.views.find((v) => v.qualifiedName === selected) ?? null);
@@ -56,12 +77,17 @@
     </header>
 
     <nav class="tabs">
-      <button class:active={tab === 'human'} onclick={() => (tab = 'human')}>Semantics</button>
-      <button class:active={tab === 'ai'} onclick={() => (tab = 'ai')} data-testid="tab-ai">AI view</button>
-      <button class:active={tab === 'raw'} onclick={() => (tab = 'raw')}>Raw</button>
+      <button class:active={activeTab === 'human'} onclick={() => (tab = 'human')}>Semantics</button>
+      <button class:active={activeTab === 'ai'} onclick={() => (tab = 'ai')} data-testid="tab-ai">AI view</button>
+      <button class:active={activeTab === 'raw'} onclick={() => (tab = 'raw')}>Raw</button>
+      {#if canBrowse}
+        <button class:active={activeTab === 'data'} onclick={() => (tab = 'data')} data-testid="tab-data"
+          >Data</button
+        >
+      {/if}
     </nav>
 
-    {#if tab === 'human'}
+    {#if activeTab === 'human'}
       {#if entity.description}
         <section><h4>Comment</h4><pre class="comment">{entity.description}</pre></section>
       {/if}
@@ -150,7 +176,19 @@
           {/each}
         </section>
       {/if}
-    {:else if tab === 'ai'}
+    {:else if activeTab === 'data'}
+      <!-- Keyed so a profile re-save, a grant change or a different relation
+           builds a fresh panel: cursors and rows belong to the connection and
+           the grant they were fetched under, never to the name on the card. -->
+      {#key `${profile}|${epoch}|${entity.qualifiedName}`}
+        <DataPanel
+          {profile}
+          resource={entity.qualifiedName}
+          columns={entity.columns}
+          primaryKey={table?.primaryKey ?? []}
+        />
+      {/key}
+    {:else if activeTab === 'ai'}
       <p class="hint">
         What an AI agent receives from the MCP describe tools of a default-configured kozou server
         for this relation - same functions, same serialization. Server-side opt-ins (RPC exposure
