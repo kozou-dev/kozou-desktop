@@ -5,6 +5,10 @@ export default defineConfig({
     environment: 'node',
     include: ['test/**/*.test.ts'],
     // Real-database suites live under the contract config.
-    exclude: ['test/contract.test.ts', 'test/mcpServer.integration.test.ts'],
+    exclude: [
+      'test/contract.test.ts',
+      'test/mcpServer.integration.test.ts',
+      'test/data.integration.test.ts',
+    ],
   },
 });

@@ -2,7 +2,14 @@
 // process. Exposes a typed, minimal API — no raw ipcRenderer, no Node.
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
-import type { KozouDesktopApi, McpMode, McpStatusEntry, ProfileInput, RowAccess } from '../shared/types.js';
+import type {
+  DataListParams,
+  KozouDesktopApi,
+  McpMode,
+  McpStatusEntry,
+  ProfileInput,
+  RowAccess,
+} from '../shared/types.js';
 import { IPC } from '../shared/types.js';
 
 const api: KozouDesktopApi = {
@@ -17,6 +24,16 @@ const api: KozouDesktopApi = {
   mcpStatus: () => ipcRenderer.invoke(IPC.mcpStatus),
   mcpReassignPort: (name: string) => ipcRenderer.invoke(IPC.mcpReassignPort, name),
   requestRowAccess: (name: string, level: RowAccess) => ipcRenderer.invoke(IPC.dataSetRowAccess, name, level),
+  dataList: (name: string, resource: string, params?: DataListParams) =>
+    ipcRenderer.invoke(IPC.dataList, name, resource, params),
+  dataGet: (name: string, resource: string, id: string) =>
+    ipcRenderer.invoke(IPC.dataGet, name, resource, id),
+  dataInsert: (name: string, resource: string, values: Record<string, unknown>) =>
+    ipcRenderer.invoke(IPC.dataInsert, name, resource, values),
+  dataUpdate: (name: string, resource: string, id: string, values: Record<string, unknown>) =>
+    ipcRenderer.invoke(IPC.dataUpdate, name, resource, id, values),
+  dataDelete: (name: string, resource: string, id: string) =>
+    ipcRenderer.invoke(IPC.dataDelete, name, resource, id),
   onMcpStatusChanged: (listener: (entries: McpStatusEntry[]) => void) => {
     const wrapped = (_e: IpcRendererEvent, entries: McpStatusEntry[]): void => listener(entries);
     ipcRenderer.on(IPC.mcpStatusChanged, wrapped);

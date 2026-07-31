@@ -9,11 +9,19 @@
 import { join } from 'node:path';
 import { BrowserWindow, app, dialog, ipcMain, safeStorage, session, type MessageBoxOptions } from 'electron';
 import { IPC, type McpStatusEntry } from '../shared/types.js';
-import { electronMcpWorkerFork } from './electronFork.js';
+import { DataWorkerManager } from './dataWorkerManager.js';
+import {
+  validateListParams,
+  validateProfileName,
+  validateResourceName,
+  validateRowId,
+  validateValues,
+} from './dataInput.js';
+import { electronDataWorkerFork, electronMcpWorkerFork } from './electronFork.js';
 import { runInspectWorker } from './inspectRunner.js';
 import { McpServerManager } from './mcpServerManager.js';
 import { ProfileStore, validateProfileInput, type Encryptor } from './profileStore.js';
-import { requestRowAccessChange, type RowAccessApproval } from './rowAccessGate.js';
+import { assertRowAccess, requestRowAccessChange, type RowAccessApproval } from './rowAccessGate.js';
 
 // Pin the machine-facing identity to a stable slug. userData, the keychain
 // service name (safeStorage), and the single-instance lock scope all derive
@@ -105,6 +113,7 @@ const rowAccessApproval: RowAccessApproval = async ({ profile, level, connection
 
 let store: ProfileStore;
 let mcpManager: McpServerManager;
+let dataManager: DataWorkerManager;
 
 function broadcastMcpStatus(entries: McpStatusEntry[]): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -155,6 +164,11 @@ void app.whenReady().then(() => {
     electronMcpWorkerFork,
     () => broadcastMcpStatus(mcpManager.status()),
   );
+  dataManager = new DataWorkerManager(
+    store,
+    () => join(import.meta.dirname, 'dataWorker.js'),
+    electronDataWorkerFork,
+  );
 
   ipcMain.handle(IPC.profilesList, () => store.list());
   ipcMain.handle(IPC.profilesSave, async (_e, input: unknown) => {
@@ -175,12 +189,16 @@ void app.whenReady().then(() => {
         connectionChanged = true;
       }
     }
-    if (connectionChanged) await mcpManager.onProfileUpserted(validated.name);
+    if (connectionChanged) {
+      await mcpManager.onProfileUpserted(validated.name);
+      dataManager.onProfileUpserted(validated.name);
+    }
     return store.upsert(validated);
   });
   ipcMain.handle(IPC.profilesDelete, async (_e, name: unknown) => {
     if (typeof name !== 'string') throw new Error('profile name must be a string');
     await mcpManager.onProfileRemoved(name);
+    dataManager.onProfileRemoved(name);
     return store.remove(name);
   });
   ipcMain.handle(IPC.inspectRun, async (_e, name: unknown) => {
@@ -211,12 +229,71 @@ void app.whenReady().then(() => {
     return mcpManager.stop(name);
   });
   // Row access lives on its own channel, apart from profiles:save: the
-  // renderer asks, main decides (native dialog), the store records. Row-data
-  // handlers themselves land with the data worker and must call
-  // assertRowAccess before reaching it.
-  ipcMain.handle(IPC.dataSetRowAccess, (_e, name: unknown, level: unknown) =>
-    requestRowAccessChange(store, rowAccessApproval, name, level),
+  // renderer asks, main decides (native dialog), the store records. A change
+  // in either direction discards the profile's data worker — its capability is
+  // fixed at fork time, so neither a revocation nor an escalation may be
+  // applied to a running one.
+  ipcMain.handle(IPC.dataSetRowAccess, async (_e, name: unknown, level: unknown) => {
+    const before = typeof name === 'string' ? store.rowAccess(name) : undefined;
+    const after = await requestRowAccessChange(store, rowAccessApproval, name, level);
+    if (typeof name === 'string' && after !== before) dataManager.onRowAccessChanged(name);
+    return after;
+  });
+
+  // Every row-data channel passes the main-owned gate first: assertRowAccess
+  // throws unless the profile is opted in at the level the operation needs, so
+  // nothing is forked and no database is touched for a profile that is 'off'.
+  // The worker's own fork-time capability is the second half of that check.
+  ipcMain.handle(IPC.dataList, (_e, name: unknown, resource: unknown, params: unknown) => {
+    const profile = validateProfileName(name);
+    assertRowAccess(store, profile, 'read');
+    const listParams = validateListParams(params);
+    return dataManager.run(profile, {
+      kind: 'list',
+      resource: validateResourceName(resource),
+      ...(listParams !== undefined ? { params: listParams } : {}),
+    });
+  });
+  ipcMain.handle(IPC.dataGet, (_e, name: unknown, resource: unknown, id: unknown) => {
+    const profile = validateProfileName(name);
+    assertRowAccess(store, profile, 'read');
+    return dataManager.run(profile, {
+      kind: 'get',
+      resource: validateResourceName(resource),
+      id: validateRowId(id),
+    });
+  });
+  ipcMain.handle(IPC.dataInsert, (_e, name: unknown, resource: unknown, values: unknown) => {
+    const profile = validateProfileName(name);
+    assertRowAccess(store, profile, 'readwrite');
+    return dataManager.run(profile, {
+      kind: 'insert',
+      resource: validateResourceName(resource),
+      values: validateValues(values),
+    });
+  });
+  ipcMain.handle(
+    IPC.dataUpdate,
+    (_e, name: unknown, resource: unknown, id: unknown, values: unknown) => {
+      const profile = validateProfileName(name);
+      assertRowAccess(store, profile, 'readwrite');
+      return dataManager.run(profile, {
+        kind: 'update',
+        resource: validateResourceName(resource),
+        id: validateRowId(id),
+        values: validateValues(values),
+      });
+    },
   );
+  ipcMain.handle(IPC.dataDelete, (_e, name: unknown, resource: unknown, id: unknown) => {
+    const profile = validateProfileName(name);
+    assertRowAccess(store, profile, 'readwrite');
+    return dataManager.run(profile, {
+      kind: 'delete',
+      resource: validateResourceName(resource),
+      id: validateRowId(id),
+    });
+  });
 
   ipcMain.handle(IPC.mcpStatus, () => mcpManager.status());
   ipcMain.handle(IPC.mcpReassignPort, (_e, name: unknown) => {
@@ -234,11 +311,12 @@ void app.whenReady().then(() => {
   });
 });
 
-// App lifetime bounds MCP lifetime: kill every server child on the way out.
-// Chromium additionally reaps utility processes with the main process, so a
-// crashed main leaves no orphans either (verified — see EGRESS.md).
+// App lifetime bounds worker lifetime: kill every server and data child on the
+// way out. Chromium additionally reaps utility processes with the main process,
+// so a crashed main leaves no orphans either (verified — see EGRESS.md).
 app.on('before-quit', () => {
   mcpManager?.killAllSync();
+  dataManager?.killAllSync();
 });
 
 app.on('window-all-closed', () => {
