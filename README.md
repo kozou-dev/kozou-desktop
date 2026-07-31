@@ -2,7 +2,7 @@
 
 **Status: experimental — validation-first MVP (M2: semantic map). Not released; no builds are distributed yet.**
 
-A desktop app that renders the **semantic model** [kozou](https://kozou.org) compiles from your PostgreSQL schema — table/column COMMENTs with `@ai`/`@policy` tags, views and their lineage, foreign-key relationships and their documented meaning — as a human-facing visual map, across multiple databases. It is **read-only by default**: row browsing and row editing are per-profile opt-ins, and the introspection and MCP surfaces stay read-only whether or not you enable them. (Row data is plumbing-only in this build — nothing in the UI reaches it yet; the browsing and editing screens land in later builds.)
+A desktop app that renders the **semantic model** [kozou](https://kozou.org) compiles from your PostgreSQL schema — table/column COMMENTs with `@ai`/`@policy` tags, views and their lineage, foreign-key relationships and their documented meaning — as a human-facing visual map, across multiple databases. It is **read-only by default**: row browsing and row editing are per-profile opt-ins, and the introspection and MCP surfaces stay read-only whether or not you enable them. (Row **browsing** is available in this build — a profile card shows its row-access level and offers the opt-in, and a **Data** tab then appears on the detail pane. Row **editing** has no screen yet; it lands in a later build.)
 
 AI agents already see this model through kozou's MCP describe surface. Generic DB clients show raw tables and none of the semantics. This app is the missing human-facing side: *see what your AI sees.*
 
@@ -14,6 +14,7 @@ AI agents already see this model through kozou's MCP describe surface. Generic D
   - **AI view** — the payload an AI agent receives from the MCP describe tools of a **default-configured** kozou server for that relation: same functions, same serialization. Server-side opt-ins (RPC exposure config, privilege-aware annotations) are not reproduced yet.
   - **Cross-database overview** — per-profile cards with relation counts and annotation coverage.
   - **Cross-database search** — find a table/view by name, comment, or `@ai` note across every open database and jump to it.
+  - **Row browsing (opt-in, off by default)** — once a profile is opted in through a native approval dialog, the detail pane gains a **Data** tab: rows of the selected table or view, sorted by any column, paged with keyset cursors. Reads run inside a `READ ONLY` transaction; a relation without a primary key has no total order, so it shows a single page and says so. Every card shows its profile's current row-access level whether or not anything is granted.
 - **Is not**: a chat client (bring your own — Claude Desktop, Cursor, etc. connect to kozou over MCP), a schema editor (schema and COMMENTs stay in SQL/Git), or a general DB client.
 
 ## Try it (trial build)
@@ -41,9 +42,10 @@ Connect with a **least-privilege role**. On Supabase, do **not** use
 `service_role`/`postgres` (they bypass row-level security). A read-only role is
 enough for everything this build does: it introspects inside a `READ ONLY`
 transaction, and row data is reached only for a profile you explicitly opt in
-(a native dialog has to approve it) — which no screen offers yet. When the
-row-editing UI lands, grant write privileges only if you mean to use it; the
-database, not this app, has the final say on what your role may change.
+(a native dialog has to approve it). Row browsing runs inside a `READ ONLY`
+transaction too, so a read-only role covers it as well. When the row-editing UI
+lands, grant write privileges only if you mean to use it; the database, not this
+app, has the final say on what your role may change.
 
 If you are trying this at our request, see [TRIAL.md](TRIAL.md) for what
 feedback is most useful.

@@ -1,6 +1,12 @@
 <script lang="ts">
   import type { ContextView } from '../../shared/contextView';
-  import type { InspectResult, McpMode, McpStatusEntry, ProfileView } from '../../shared/types';
+  import type {
+    InspectResult,
+    McpMode,
+    McpStatusEntry,
+    ProfileView,
+    RowAccess,
+  } from '../../shared/types';
   import { displayConnection } from '../../shared/url';
   import { computeCoverage } from './lib/coverage';
 
@@ -12,9 +18,11 @@
     mcpMode,
     mcp,
     duplicatePending,
+    rowAccessPending,
     oninspect,
     onselect,
     ondelete,
+    onrowaccess,
     onmcpstart,
     onmcpstop,
     onmcpoverride,
@@ -29,9 +37,11 @@
     mcpMode: McpMode;
     mcp: Record<string, McpStatusEntry>;
     duplicatePending: { profile: string; duplicates: string[] } | null;
+    rowAccessPending: string | null;
     oninspect: (name: string) => void;
     onselect: (name: string) => void;
     ondelete: (name: string) => void;
+    onrowaccess: (name: string, level: RowAccess) => void;
     onmcpstart: (name: string) => void;
     onmcpstop: (name: string) => void;
     onmcpoverride: (name: string) => void;
@@ -70,6 +80,22 @@
   const stoppedish = (st: McpStatusEntry | undefined): boolean =>
     st === undefined || (st.status !== 'running' && st.status !== 'starting');
 
+  /** Row access is shown on every card, unconditionally — including the 'off'
+   *  default. Granting is prompt-guarded but revoking is not (a decline on a
+   *  revocation prompt would leave the dangerous state in place), so the level
+   *  has to be legible without opening anything: this badge is what tells an
+   *  operator that a grant they do not remember making is still in force. */
+  const rowAccessBadge = (level: RowAccess): { text: string; cls: string } => {
+    switch (level) {
+      case 'readwrite':
+        return { text: 'rows: editing', cls: 'rw' };
+      case 'read':
+        return { text: 'rows: browsing', cls: 'ro' };
+      default:
+        return { text: 'rows: off', cls: '' };
+    }
+  };
+
   /** Keyboard/click helper for the linkish span-buttons inside the card. */
   const act = (e: Event, fn: () => void): void => {
     e.stopPropagation();
@@ -81,6 +107,7 @@
   {#each profiles as p (p.name)}
     {@const result = results[p.name]}
     {@const cov = result?.ok ? computeCoverage(result.context as ContextView) : null}
+    {@const ra = rowAccessBadge(p.rowAccess)}
     <button
       class="card"
       class:active={selected === p.name}
@@ -130,6 +157,35 @@
           }}
           onkeydown={(e) => e.key === 'Enter' && (e.stopPropagation(), ondelete(p.name))}>delete</span
         >
+      </div>
+      <div class="row rowaccess" data-testid={`rowaccess-${p.name}`}>
+        <span class={`ra-badge ${ra.cls}`} data-testid={`rowaccess-badge-${p.name}`}>{ra.text}</span>
+        {#if rowAccessPending === p.name}
+          <span class="ra-wait">waiting for approval...</span>
+        {:else if p.rowAccess === 'off'}
+          <!-- Only 'read' is offered here: the row editor lands with the write
+               forms, and a grant with no UI behind it is a capability nobody
+               asked for. -->
+          <span
+            class="linkish"
+            role="button"
+            tabindex="0"
+            data-testid={`rowaccess-enable-${p.name}`}
+            onclick={(e) => act(e, () => onrowaccess(p.name, 'read'))}
+            onkeydown={(e) => e.key === 'Enter' && act(e, () => onrowaccess(p.name, 'read'))}
+            >enable browsing</span
+          >
+        {:else}
+          <span
+            class="linkish danger"
+            role="button"
+            tabindex="0"
+            data-testid={`rowaccess-off-${p.name}`}
+            onclick={(e) => act(e, () => onrowaccess(p.name, 'off'))}
+            onkeydown={(e) => e.key === 'Enter' && act(e, () => onrowaccess(p.name, 'off'))}
+            >turn off</span
+          >
+        {/if}
       </div>
       {#if mcpMode === 'local'}
         {@const st = mcp[p.name]}
@@ -289,6 +345,31 @@
     font-size: 0.75rem;
     border-top: 1px dashed #eee;
     padding-top: 0.3rem;
+  }
+  .rowaccess {
+    font-size: 0.75rem;
+    border-top: 1px dashed #eee;
+    padding-top: 0.3rem;
+  }
+  .ra-badge {
+    border: 1px solid #ccc;
+    border-radius: 999px;
+    padding: 0.05rem 0.5rem;
+    color: #666;
+    font-size: 0.72rem;
+  }
+  .ra-badge.ro {
+    border-color: #35577d;
+    color: #35577d;
+    background: #f2f6fd;
+  }
+  .ra-badge.rw {
+    border-color: #a04a00;
+    color: #a04a00;
+    background: #fff6ef;
+  }
+  .ra-wait {
+    color: #7a5b00;
   }
   .mcp-badge {
     border: 1px solid #ccc;

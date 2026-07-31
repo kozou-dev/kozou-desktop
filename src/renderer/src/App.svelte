@@ -1,6 +1,12 @@
 <script lang="ts">
   import type { ContextView } from '../../shared/contextView';
-  import type { InspectResult, McpMode, McpStatusEntry, ProfileView } from '../../shared/types';
+  import type {
+    InspectResult,
+    McpMode,
+    McpStatusEntry,
+    ProfileView,
+    RowAccess,
+  } from '../../shared/types';
   import DetailPane from './DetailPane.svelte';
   import EnumsPanel from './EnumsPanel.svelte';
   import FunctionsPanel from './FunctionsPanel.svelte';
@@ -22,8 +28,13 @@
   // URL-changing re-save: bump a per-name token on every mutation and drop
   // in-flight inspect results whose token no longer matches.
   const profileTokens = new Map<string, number>();
+  // The same invalidation, in a form the template can key on: row-data panels
+  // hold their own cursors and pages, and a profile that now points elsewhere
+  // must not keep paging a previous database's rows behind an unchanged name.
+  let profileEpoch = $state(0);
   const bumpToken = (name: string): void => {
     profileTokens.set(name, (profileTokens.get(name) ?? 0) + 1);
+    profileEpoch += 1;
   };
 
   // Add-profile form
@@ -44,6 +55,9 @@
   let mcpMode = $state<McpMode>('off');
   let mcp = $state<Record<string, McpStatusEntry>>({});
   let duplicatePending = $state<{ profile: string; duplicates: string[] } | null>(null);
+  // A native approval dialog is modal to the window, so at most one row-access
+  // request can be in flight; the name is held to show which card is waiting.
+  let rowAccessPending = $state<string | null>(null);
   let pendingMode = $state<McpMode | null>(null);
   let snippetFor = $state<string | null>(null);
 
@@ -131,6 +145,34 @@
     }
   }
 
+  /** Ask main to change a profile's row-access level. An escalation opens a
+   *  native dialog owned by main, so this call can sit unresolved for as long
+   *  as the operator takes; the returned value is the level actually in force
+   *  afterwards, which is 'off' when the prompt was declined. */
+  async function setRowAccess(name: string, level: RowAccess): Promise<void> {
+    if (rowAccessPending !== null) return;
+    formError = null;
+    rowAccessPending = name;
+    try {
+      await api.requestRowAccess(name, level);
+    } catch (err) {
+      formError = message(err);
+    } finally {
+      rowAccessPending = null;
+    }
+    try {
+      // Re-read rather than trust the returned level: the store is the only
+      // authority, and a profile deleted while the prompt was open is gone.
+      profiles = await api.listProfiles();
+    } catch (err) {
+      formError = message(err);
+    }
+    // A revocation must not leave a browse panel holding rows it may no longer
+    // fetch, and an escalation restarts the worker — either way the panel's
+    // cursors belong to the previous grant.
+    profileEpoch += 1;
+  }
+
   function copyText(text: string): void {
     // Best-effort: the snippet stays visible for manual copy if the
     // clipboard API refuses.
@@ -139,6 +181,7 @@
 
   const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
+  const currentProfile = $derived(profiles.find((p) => p.name === selectedProfile) ?? null);
   const current = $derived(selectedProfile ? (results[selectedProfile] ?? null) : null);
   const currentContext = $derived(current?.ok ? (current.context as ContextView) : null);
 
@@ -334,9 +377,11 @@
     {mcpMode}
     {mcp}
     {duplicatePending}
+    {rowAccessPending}
     oninspect={(name) => void inspect(name)}
     onselect={selectProfile}
     ondelete={(name) => void remove(name)}
+    onrowaccess={(name, level) => void setRowAccess(name, level)}
     onmcpstart={(name) => void mcpStart(name)}
     onmcpstop={(name) => void mcpStop(name)}
     onmcpoverride={(name) => void mcpStart(name, true)}
@@ -397,8 +442,15 @@
             selected={selectedEntity}
             onselect={(id) => (selectedEntity = id)}
           />
-          {#if selectedEntity}
-            <DetailPane context={currentContext} aiViews={current.aiViews} selected={selectedEntity} />
+          {#if selectedEntity && selectedProfile}
+            <DetailPane
+              context={currentContext}
+              aiViews={current.aiViews}
+              selected={selectedEntity}
+              profile={selectedProfile}
+              rowAccess={currentProfile?.rowAccess ?? 'off'}
+              epoch={profileEpoch}
+            />
           {:else}
             <aside class="placeholder">Click a relation on the map to see its compiled semantics - and what a default-configured kozou server hands your AI for it.</aside>
           {/if}

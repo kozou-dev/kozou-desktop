@@ -9,12 +9,16 @@ Please run it against **your real databases** (two or more, ideally across
 different projects) for a couple of weeks, the way you normally work. There is
 nothing to configure beyond adding your connection profiles.
 
-A least-privilege **read-only** connection role is all you need: this build only
-introspects, inside a `READ ONLY` transaction. Row data is not part of the trial
-— the app has no screen that reads or edits rows, and the per-profile opt-in
-that will unlock one (approved in a system dialog, off by default) is plumbing
-that no UI reaches yet. When it does arrive, row values will be displayed only:
-never uploaded, never written to disk, never logged.
+A least-privilege **read-only** connection role is all you need. Introspection
+runs inside a `READ ONLY` transaction, and so does row browsing — the one part
+of the app that touches row data at all. Browsing is **off for every profile**
+until you turn it on from the profile card and approve a system dialog; the card
+shows the current level either way. Row **editing** has no screen yet. Wherever
+row values are shown they are displayed only: never uploaded, never written to
+disk, never logged.
+
+The map is what we are asking about — treat the Data tab as incidental unless
+reaching for it tells you something about the map.
 
 ## What we'd love to hear
 
