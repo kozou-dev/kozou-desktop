@@ -225,6 +225,92 @@ describe('ProfileStore local MCP fields', () => {
   });
 });
 
+describe('ProfileStore row access', () => {
+  const base = { url: 'postgresql://u@h:5432/db', schemas: ['public'] };
+
+  it('defaults to off and writes no rowAccess key until one is granted', () => {
+    const { store, dir } = freshStore();
+    store.upsert({ name: 'a', ...base });
+    expect(store.list()[0]!.rowAccess).toBe('off');
+    expect(store.rowAccess('a')).toBe('off');
+    const stored = JSON.parse(readFileSync(join(dir, 'profiles.json'), 'utf8'));
+    expect(stored.profiles[0]).not.toHaveProperty('rowAccess');
+    expect(stored.version).toBe(1);
+  });
+
+  it('persists an explicit grant, revokes back to absent, and rejects junk levels', () => {
+    const { store, dir } = freshStore();
+    store.upsert({ name: 'a', ...base });
+    expect(store.setRowAccess('a', 'read')).toBe('read');
+    expect(store.rowAccess('a')).toBe('read');
+    expect(store.setRowAccess('a', 'readwrite')).toBe('readwrite');
+    expect(store.list()[0]!.rowAccess).toBe('readwrite');
+    const file = join(dir, 'profiles.json');
+    expect(JSON.parse(readFileSync(file, 'utf8')).profiles[0].rowAccess).toBe('readwrite');
+    // Revoking clears the key rather than storing an explicit 'off' — the
+    // fail-closed state stays the absent one.
+    expect(store.setRowAccess('a', 'off')).toBe('off');
+    expect(JSON.parse(readFileSync(file, 'utf8')).profiles[0]).not.toHaveProperty('rowAccess');
+    // The store file never leaves version 1 (older builds share userData).
+    expect(JSON.parse(readFileSync(file, 'utf8')).version).toBe(1);
+    for (const junk of ['write', 'ON', true, 1, null]) {
+      expect(() => store.setRowAccess('a', junk)).toThrow(/rowAccess must be/);
+    }
+    expect(() => store.rowAccess('nope')).toThrow(/unknown profile/);
+    expect(() => store.setRowAccess('nope', 'read')).toThrow(/unknown profile/);
+  });
+
+  it('ignores rowAccess smuggled into a profile upsert', () => {
+    const { store } = freshStore();
+    store.upsert({ name: 'a', ...base, rowAccess: 'readwrite' });
+    expect(store.rowAccess('a')).toBe('off');
+    // Nor can a form save escalate an existing grant.
+    store.setRowAccess('a', 'read');
+    store.upsert({ name: 'a', ...base, rowAccess: 'readwrite' });
+    expect(store.rowAccess('a')).toBe('read');
+  });
+
+  it('preserves a granted rowAccess across renderer upserts that omit it', () => {
+    const { store } = freshStore();
+    store.upsert({ name: 'a', ...base });
+    store.setRowAccess('a', 'readwrite');
+    // A plain form edit must not silently revoke the grant the user approved.
+    store.upsert({ name: 'a', ...base, label: 'renamed' });
+    expect(store.list()[0]!.rowAccess).toBe('readwrite');
+  });
+
+  it('degrades a junk on-disk rowAccess to off instead of propagating it', () => {
+    const { store, dir } = freshStore();
+    store.upsert({ name: 'a', ...base });
+    const file = join(dir, 'profiles.json');
+    for (const junk of ['all', 'write', true, 7, { level: 'readwrite' }]) {
+      const data = JSON.parse(readFileSync(file, 'utf8'));
+      data.profiles[0].rowAccess = junk;
+      writeFileSync(file, JSON.stringify(data));
+      expect(store.rowAccess('a')).toBe('off');
+      expect(store.list()[0]!.rowAccess).toBe('off');
+    }
+    // Junk is not carried forward by an upsert either.
+    store.upsert({ name: 'a', ...base });
+    expect(JSON.parse(readFileSync(file, 'utf8')).profiles[0]).not.toHaveProperty('rowAccess');
+  });
+
+  it('stays readable by a build that predates rowAccess (additive, version 1)', () => {
+    const { store, dir } = freshStore();
+    store.upsert({ name: 'a', ...base });
+    store.setRowAccess('a', 'readwrite');
+    const file = join(dir, 'profiles.json');
+    const raw = JSON.parse(readFileSync(file, 'utf8'));
+    // An older build accepts the file (version 1 + profiles array) and maps
+    // it with the fields it knows; rowAccess is simply an unknown key.
+    expect(raw.version).toBe(1);
+    expect(Array.isArray(raw.profiles)).toBe(true);
+    expect(raw.profiles[0].name).toBe('a');
+    // Reading it back here must not have been a one-way trip.
+    expect(store.rowAccess('a')).toBe('readwrite');
+  });
+});
+
 describe('validateProfileInput (untrusted IPC boundary)', () => {
   const base = { name: 'ok', url: 'postgresql://u@h/db', schemas: ['public'] };
 

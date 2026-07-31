@@ -7,12 +7,13 @@
 // the user's own databases.
 
 import { join } from 'node:path';
-import { BrowserWindow, app, ipcMain, safeStorage, session } from 'electron';
+import { BrowserWindow, app, dialog, ipcMain, safeStorage, session, type MessageBoxOptions } from 'electron';
 import { IPC, type McpStatusEntry } from '../shared/types.js';
 import { electronMcpWorkerFork } from './electronFork.js';
 import { runInspectWorker } from './inspectRunner.js';
 import { McpServerManager } from './mcpServerManager.js';
 import { ProfileStore, validateProfileInput, type Encryptor } from './profileStore.js';
+import { requestRowAccessChange, type RowAccessApproval } from './rowAccessGate.js';
 
 // Pin the machine-facing identity to a stable slug. userData, the keychain
 // service name (safeStorage), and the single-instance lock scope all derive
@@ -65,6 +66,37 @@ const safeStorageEncryptor: Encryptor = {
   available: keychainBackedEncryptionAvailable,
   encrypt: (plaintext) => safeStorage.encryptString(plaintext).toString('base64'),
   decrypt: (blob) => safeStorage.decryptString(Buffer.from(blob, 'base64')),
+};
+
+/** The trust anchor for a row-access escalation: a native dialog drawn by
+ *  main, modal to the window. Never a renderer modal — a compromised renderer
+ *  could draw and "click" its own. Approval is the affirmative button only;
+ *  Esc and the window close both land on cancelId. */
+const rowAccessApproval: RowAccessApproval = async ({ profile, level }) => {
+  const write = level === 'readwrite';
+  const options: MessageBoxOptions = {
+    type: 'warning',
+    buttons: ['Cancel', write ? 'Enable row editing' : 'Enable row browsing'],
+    defaultId: 0,
+    cancelId: 0,
+    title: 'Enable row data access',
+    message: write
+      ? `Allow row editing for the profile "${profile}"?`
+      : `Allow row browsing for the profile "${profile}"?`,
+    detail: write
+      ? 'Row editing runs INSERT, UPDATE and DELETE statements against this database using the credentials stored for this profile. ' +
+        'Deleted or overwritten rows cannot be restored by this app, and the database enforces the final say on what your role may change. ' +
+        'Introspection and the local MCP surface stay read-only.'
+      : 'Row browsing reads table and view data from this database using the credentials stored for this profile. ' +
+        'Row data is only displayed — it is never uploaded and never written to disk. ' +
+        'Introspection and the local MCP surface stay read-only.',
+  };
+  const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+  const { response } =
+    win !== undefined && !win.isDestroyed()
+      ? await dialog.showMessageBox(win, options)
+      : await dialog.showMessageBox(options);
+  return response === 1;
 };
 
 let store: ProfileStore;
@@ -174,6 +206,14 @@ void app.whenReady().then(() => {
     if (typeof name !== 'string') throw new Error('profile name must be a string');
     return mcpManager.stop(name);
   });
+  // Row access lives on its own channel, apart from profiles:save: the
+  // renderer asks, main decides (native dialog), the store records. Row-data
+  // handlers themselves land with the data worker and must call
+  // assertRowAccess before reaching it.
+  ipcMain.handle(IPC.dataSetRowAccess, (_e, name: unknown, level: unknown) =>
+    requestRowAccessChange(store, rowAccessApproval, name, level),
+  );
+
   ipcMain.handle(IPC.mcpStatus, () => mcpManager.status());
   ipcMain.handle(IPC.mcpReassignPort, (_e, name: unknown) => {
     if (typeof name !== 'string') throw new Error('profile name must be a string');

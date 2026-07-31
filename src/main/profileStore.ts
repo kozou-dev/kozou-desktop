@@ -6,7 +6,14 @@
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { LocalMcpAllocation, McpMode, ProfileInput, ProfileView, RemoteMcpDeclaration } from '../shared/types.js';
+import type {
+  LocalMcpAllocation,
+  McpMode,
+  ProfileInput,
+  ProfileView,
+  RemoteMcpDeclaration,
+  RowAccess,
+} from '../shared/types.js';
 import { joinDbUrl, splitDbUrl } from '../shared/url.js';
 import { generateMcpPath, nextFreePort } from './mcpAllocation.js';
 
@@ -32,6 +39,10 @@ type StoredProfile = {
   localMcp?: LocalMcpAllocation;
   /** Remote-MCP declaration (user-owned via the profile form). */
   remoteMcp?: RemoteMcpDeclaration;
+  /** Row-data access grant (main-owned; absent means 'off'). Absent rather
+   *  than an explicit 'off' so the fail-closed state is also the shape an
+   *  older build writes back. */
+  rowAccess?: 'read' | 'readwrite';
 };
 
 // The store stays at version 1 with additive optional fields: a version bump
@@ -57,6 +68,22 @@ function sanitizeLocalMcp(x: unknown): LocalMcpAllocation | undefined {
   if (typeof a.path !== 'string' || !a.path.startsWith('/mcp-')) return undefined;
   if (typeof a.autoStart !== 'boolean') return undefined;
   return { port: a.port as number, path: a.path, autoStart: a.autoStart };
+}
+
+/** Anything but the two known grants — a hand-edited file, a truncated
+ *  write, a value from a future build — degrades to "absent" = 'off'. Junk
+ *  must never widen a capability, so this direction is the only safe one. */
+function sanitizeRowAccess(x: unknown): 'read' | 'readwrite' | undefined {
+  return x === 'read' || x === 'readwrite' ? x : undefined;
+}
+
+/** Validate an untrusted row-access level (IPC input) before it can reach
+ *  the store. */
+export function validateRowAccess(level: unknown): RowAccess {
+  if (level !== 'off' && level !== 'read' && level !== 'readwrite') {
+    throw new Error('rowAccess must be one of "off" | "read" | "readwrite"');
+  }
+  return level;
 }
 
 const PROFILE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -175,6 +202,7 @@ export class ProfileStore {
       schemas: p.schemas,
       timeoutMs: p.timeoutMs,
       hasPassword: p.encryptedPassword !== undefined,
+      rowAccess: sanitizeRowAccess(p.rowAccess) ?? 'off',
       localMcp: sanitizeLocalMcp(p.localMcp),
       remoteMcp: p.remoteMcp,
     }));
@@ -196,11 +224,14 @@ export class ProfileStore {
     const data = this.read();
     const i = data.profiles.findIndex((p) => p.name === input.name);
     const existing = i >= 0 ? data.profiles[i] : undefined;
-    // The local-MCP allocation is main-owned: renderer input never carries
-    // it, so an edit must not drop it. The remote declaration follows the
-    // input when present ({ declared: false } clears) and is preserved when
-    // the input omits it.
+    // The local-MCP allocation and the row-access grant are main-owned:
+    // renderer input never carries them (validateProfileInput drops unknown
+    // keys), so an edit must not drop them either — renaming a profile must
+    // not silently revoke a grant the user approved in a native dialog. The
+    // remote declaration follows the input when present ({ declared: false }
+    // clears) and is preserved when the input omits it.
     const preservedLocalMcp = sanitizeLocalMcp(existing?.localMcp);
+    const preservedRowAccess = sanitizeRowAccess(existing?.rowAccess);
     const remoteMcp: RemoteMcpDeclaration | undefined =
       input.remoteMcp === undefined
         ? existing?.remoteMcp
@@ -217,6 +248,7 @@ export class ProfileStore {
       ...(encryptedPassword !== undefined ? { encryptedPassword } : {}),
       ...(preservedLocalMcp !== undefined ? { localMcp: preservedLocalMcp } : {}),
       ...(remoteMcp !== undefined ? { remoteMcp } : {}),
+      ...(preservedRowAccess !== undefined ? { rowAccess: preservedRowAccess } : {}),
     };
     if (i >= 0) data.profiles[i] = next;
     else data.profiles.push(next);
@@ -255,6 +287,29 @@ export class ProfileStore {
     data.mcpMode = mode;
     this.write(data);
     return mode;
+  }
+
+  /** The profile's row-data access level. Junk on disk degrades to 'off' —
+   *  the fail-closed default, same philosophy as mcpMode. Read this (never a
+   *  renderer-supplied level) before any row-data work. */
+  rowAccess(name: string): RowAccess {
+    const data = this.read();
+    return sanitizeRowAccess(this.findProfile(data, name).rowAccess) ?? 'off';
+  }
+
+  /** Persist a row-access level. Main-owned and deliberately separate from
+   *  upsert: a capability grant must never be a side effect of saving the
+   *  profile form. Escalation additionally requires native approval — that
+   *  gate lives in rowAccessGate.ts, which is the only intended caller
+   *  (this method itself does not prompt). */
+  setRowAccess(name: string, level: unknown): RowAccess {
+    const next = validateRowAccess(level);
+    const data = this.read();
+    const p = this.findProfile(data, name);
+    if (next === 'off') delete p.rowAccess;
+    else p.rowAccess = next;
+    this.write(data);
+    return next;
   }
 
   /** The profile's local-MCP allocation, assigning port + capability path on

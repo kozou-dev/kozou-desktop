@@ -24,6 +24,15 @@ export type LocalMcpAllocation = {
   autoStart: boolean;
 };
 
+/** Per-profile row-data access level. 'off' (the default) means the app
+ *  never reads or writes row data for that profile — introspection only, the
+ *  posture every profile starts from. 'read' allows browsing rows; 'readwrite'
+ *  additionally allows insert/update/delete from the desktop UI. Granting is
+ *  main-owned: it is not part of the profile form, and an escalation is
+ *  persisted only after a native approval dialog. The MCP surface is
+ *  unaffected — it stays read-only by construction whatever this says. */
+export type RowAccess = 'off' | 'read' | 'readwrite';
+
 /** User declaration that a remote MCP server (e.g. `kozou mcp` run
  *  elsewhere) already serves this profile's database. Only used to warn
  *  before starting a duplicate local server against the same database. */
@@ -45,6 +54,8 @@ export type ProfileView = {
   timeoutMs?: number;
   /** Whether a password is stored (encrypted) for this profile. */
   hasPassword: boolean;
+  /** Row-data access level (main-owned; 'off' unless explicitly granted). */
+  rowAccess: RowAccess;
   /** Local-MCP allocation, present once assigned (main-owned). */
   localMcp?: LocalMcpAllocation;
   /** Remote-MCP declaration, present when the user declared one. */
@@ -61,8 +72,9 @@ export type ProfileInput = {
   schemas: string[];
   timeoutMs?: number;
   /** Remote-MCP declaration. Omitted -> preserve the stored value;
-   *  `{ declared: false }` -> clear it. The local-MCP allocation is
-   *  main-owned and never part of renderer input. */
+   *  `{ declared: false }` -> clear it. The local-MCP allocation and the
+   *  row-access level are main-owned and never part of renderer input:
+   *  granting a capability must not ride along with a form save. */
   remoteMcp?: { declared: boolean; url?: string };
 };
 
@@ -177,6 +189,11 @@ export type KozouDesktopApi = {
   mcpStop(name: string): Promise<McpStatusEntry[]>;
   mcpStatus(): Promise<McpStatusEntry[]>;
   mcpReassignPort(name: string): Promise<McpStatusEntry[]>;
+  /** Ask main to change a profile's row-access level. The renderer can only
+   *  ask: an escalation is persisted after a native approval dialog and
+   *  resolves to the unchanged level when the user declines. Downgrades
+   *  (including 'off') apply without a prompt. */
+  requestRowAccess(name: string, level: RowAccess): Promise<RowAccess>;
   /** Subscribe to status pushes (server exit, restore progress). Returns an
    *  unsubscribe function. */
   onMcpStatusChanged(listener: (entries: McpStatusEntry[]) => void): () => void;
@@ -193,6 +210,9 @@ export const IPC = {
   mcpStop: 'mcp:stop',
   mcpStatus: 'mcp:status',
   mcpReassignPort: 'mcp:reassign-port',
+  /** Row-access grant requests ride their own channel, kept apart from the
+   *  profile-save channel so a capability change is always an explicit act. */
+  dataSetRowAccess: 'data:set-row-access',
   /** main -> renderer push (webContents.send), not an invoke channel. */
   mcpStatusChanged: 'mcp:status-changed',
 } as const;
