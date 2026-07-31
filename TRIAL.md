@@ -9,11 +9,12 @@ Please run it against **your real databases** (two or more, ideally across
 different projects) for a couple of weeks, the way you normally work. There is
 nothing to configure beyond adding your connection profiles.
 
-The app is **read-only unless you opt a profile in**: browsing row data — and
-editing it — is off for every profile until you enable it per profile and
-approve it in a system dialog. A least-privilege read-only connection role is
-enough for everything the map itself does, and row values are only ever
-displayed: never uploaded, never written to disk, never logged.
+A least-privilege **read-only** connection role is all you need: this build only
+introspects, inside a `READ ONLY` transaction. Row data is not part of the trial
+— the app has no screen that reads or edits rows, and the per-profile opt-in
+that will unlock one (approved in a system dialog, off by default) is plumbing
+that no UI reaches yet. When it does arrive, row values will be displayed only:
+never uploaded, never written to disk, never logged.
 
 ## What we'd love to hear
 

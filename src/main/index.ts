@@ -178,8 +178,14 @@ void app.whenReady().then(() => {
     // the store changes rather than serve the old database. Label/color
     // edits keep the server (and its AI-client sessions) running.
     let connectionChanged = false;
+    // The data worker additionally bakes in the statement timeout at fork time,
+    // so a timeout edit invalidates it even when the connection is untouched —
+    // otherwise the worker would keep enforcing the old budget while main
+    // measured the new one against it.
+    let timeoutChanged = false;
     const existing = store.list().find((p) => p.name === validated.name);
     if (existing !== undefined) {
+      timeoutChanged = existing.timeoutMs !== validated.timeoutMs;
       try {
         const current = store.connectionUrl(validated.name);
         connectionChanged =
@@ -189,10 +195,8 @@ void app.whenReady().then(() => {
         connectionChanged = true;
       }
     }
-    if (connectionChanged) {
-      await mcpManager.onProfileUpserted(validated.name);
-      dataManager.onProfileUpserted(validated.name);
-    }
+    if (connectionChanged) await mcpManager.onProfileUpserted(validated.name);
+    if (connectionChanged || timeoutChanged) dataManager.onProfileUpserted(validated.name);
     return store.upsert(validated);
   });
   ipcMain.handle(IPC.profilesDelete, async (_e, name: unknown) => {

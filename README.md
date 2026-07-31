@@ -2,7 +2,7 @@
 
 **Status: experimental — validation-first MVP (M2: semantic map). Not released; no builds are distributed yet.**
 
-A desktop app that renders the **semantic model** [kozou](https://kozou.org) compiles from your PostgreSQL schema — table/column COMMENTs with `@ai`/`@policy` tags, views and their lineage, foreign-key relationships and their documented meaning — as a human-facing visual map, across multiple databases. It is **read-only by default**: row browsing and row editing are per-profile opt-ins, and the introspection and MCP surfaces stay read-only whether or not you enable them.
+A desktop app that renders the **semantic model** [kozou](https://kozou.org) compiles from your PostgreSQL schema — table/column COMMENTs with `@ai`/`@policy` tags, views and their lineage, foreign-key relationships and their documented meaning — as a human-facing visual map, across multiple databases. It is **read-only by default**: row browsing and row editing are per-profile opt-ins, and the introspection and MCP surfaces stay read-only whether or not you enable them. (Row data is plumbing-only in this build — nothing in the UI reaches it yet; the browsing and editing screens land in later builds.)
 
 AI agents already see this model through kozou's MCP describe surface. Generic DB clients show raw tables and none of the semantics. This app is the missing human-facing side: *see what your AI sees.*
 
@@ -39,11 +39,11 @@ box to move between them.
 
 Connect with a **least-privilege role**. On Supabase, do **not** use
 `service_role`/`postgres` (they bypass row-level security). A read-only role is
-enough for everything the app does by default: it introspects inside a
-`READ ONLY` transaction, and it reads or writes row data only for a profile you
-explicitly opt in (a native dialog has to approve it). Grant write privileges
-only if you mean to edit rows from here — the database, not this app, has the
-final say on what your role may change.
+enough for everything this build does: it introspects inside a `READ ONLY`
+transaction, and row data is reached only for a profile you explicitly opt in
+(a native dialog has to approve it) — which no screen offers yet. When the
+row-editing UI lands, grant write privileges only if you mean to use it; the
+database, not this app, has the final say on what your role may change.
 
 If you are trying this at our request, see [TRIAL.md](TRIAL.md) for what
 feedback is most useful.
@@ -73,7 +73,7 @@ no signing, notarization, auto-update, or published binaries are in scope.
 
 ## Security posture
 
-- **Read-only by default; write is a separate, opt-in surface**: introspection always runs inside a `READ ONLY` transaction, and so does every row read. Row browsing and row editing are off for every profile until you turn them on, per profile, through a dialog drawn by the app's main process (never by the UI, which can only ask). The introspection and MCP surfaces stay read-only regardless of that grant. What enforces the split is structural, and CI checks it (`scripts/check-treeshake.mjs`): the write path may only be *reachable* from the row-data worker's bundle — the introspection worker, the MCP server worker and the main process are each bundled and scanned for it, and no source anywhere may start `@kozou/api`'s HTTP server. Reachability, not absence: the packaged app ships `node_modules` whole, so the code is present in the artifact whether or not anything can call it. The optional local MCP mode serves the describe tools only — the execution tool is neither advertised nor dispatchable, pinned by an integration test against a real database.
+- **Read-only by default; write is a separate, opt-in surface**: introspection always runs inside a `READ ONLY` transaction, and so does every row read. Row browsing and row editing are off for every profile until you turn them on, per profile, through a dialog drawn by the app's main process (never by the UI, which can only ask). The introspection and MCP surfaces stay read-only regardless of that grant. What enforces the split is structural, and CI checks it (`scripts/check-treeshake.mjs`): the write path may only be *reachable* from the row-data worker's bundle — the introspection worker, the MCP server worker and the main process are each bundled and scanned for it; no source anywhere may name `@kozou/api`'s HTTP-server entry points; and no source outside the worker directory may import a database driver, so a hand-written statement is confined to the same process as the generated ones. Reachability, not absence: the packaged app ships `node_modules` whole, so the code is present in the artifact whether or not anything can call it. `READ ONLY` is the database's own enforcement of what PostgreSQL classifies as a write — a view or function that calls out to something external is beyond what any transaction mode can undo. The optional local MCP mode serves the describe tools only — the execution tool is neither advertised nor dispatchable, pinned by an integration test against a real database.
 - **What a row-editing grant really costs**: for a profile you opted in to editing, a compromised renderer can write to that database with your stored credentials. That is the one genuinely new risk here, and the mitigations stop at "off by default", "per profile", and "the grant needs a native approval" — see `EGRESS.md` for why nothing stronger is available inside Electron's trust model.
 - **Zero egress, loopback-only serving**: outbound, the only network peer is your own database. No telemetry, no crash upload, no update checks, spellchecker disabled (CI-checked: `scripts/check-egress-static.mjs`). By default the app opens no server and no port; the opt-in local MCP mode (default off) listens on `127.0.0.1` only, behind a per-profile secret path and a DNS-rebinding guard — see `EGRESS.md` for the exact local exposure.
 - **Secrets**: database passwords are stored via Electron `safeStorage` (OS keychain-backed), passed to workers via environment only — never argv, logs, or config files. On Linux this additionally requires a real keyring backend: the `basic_text` fallback (a hardcoded key) is rejected rather than silently accepted.

@@ -64,6 +64,11 @@ export const MAX_DATA_TIMEOUT_MS = 300_000;
  *  multiply the credential's footprint on the server. */
 const POOL_MAX = 2;
 
+/** Budget for acquiring a connection. PostgreSQL's `statement_timeout` starts
+ *  once a statement runs, so connect has to be bounded separately or a stalled
+ *  network path hangs an operation with nothing to cut it short. */
+const CONNECT_TIMEOUT_MS = 10_000;
+
 /** A pooled client: queryable and returnable. A pg PoolClient satisfies it. */
 export type DataClient = Queryable & { release(err?: boolean | Error): void };
 
@@ -118,6 +123,11 @@ const FIXED_FAILURE: Record<number, { code: DataErrorCode; message: string }> = 
 
 const GENERIC_FAILURE = 'The operation failed. No changes were kept.';
 
+/** Used only where "no changes were kept" would be a claim we cannot make: if
+ *  the COMMIT acknowledgment is lost, the server may well have committed. */
+const COMMIT_UNKNOWN =
+  'The connection was lost while committing. The change may or may not have been applied — reload the rows before retrying.';
+
 type StderrWrite = typeof process.stderr.write;
 
 let silenceDepth = 0;
@@ -148,9 +158,21 @@ export async function withSilencedStderr<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /** Log a breadcrumb that carries no row data: what happened, and nothing the
- *  database said about the values involved. */
+ *  database said about the values involved. Every line written from this
+ *  process carries LOG_PREFIX, which is also main's allowlist for what may
+ *  reach the app log — so a caller must not hand this a raw database message. */
 function breadcrumb(detail: string): void {
   process.stderr.write(`${LOG_PREFIX} ${detail}\n`);
+}
+
+/** The SQLSTATE of a database error, or 'unknown'. This is the ONLY part of a
+ *  statement-phase error that is safe to log: a message raised at COMMIT time —
+ *  a DEFERRABLE INITIALLY DEFERRED constraint, or a constraint trigger doing
+ *  `RAISE EXCEPTION '... %', NEW.col` — can quote the row's own values, and
+ *  those must reach neither a log nor the UI. A five-character SQLSTATE cannot. */
+function sqlstateOf(err: unknown): string {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? code : 'unknown';
 }
 
 function isWrite(op: DataOperation): boolean {
@@ -270,6 +292,10 @@ export function createDataRunner(options: DataRunnerOptions): DataRunner {
       try {
         client = await pool.connect();
       } catch (err) {
+        // No statement has run yet, so this message cannot quote a row value —
+        // it can quote the connection URL, which is what `redact` removes. It
+        // is kept in full because "why can't it connect" is the one failure an
+        // operator can actually act on.
         breadcrumb(`could not open a connection: ${redact(errorText(err))}`);
         return { ok: false, status: 503, code: 'unavailable', message: GENERIC_FAILURE };
       }
@@ -293,14 +319,28 @@ export function createDataRunner(options: DataRunnerOptions): DataRunner {
         }
         // A read never commits: there is nothing to commit, and "reads do not
         // commit" is then a property of this code rather than of the SQL.
-        await client.query(write ? 'COMMIT' : 'ROLLBACK');
+        try {
+          await client.query(write ? 'COMMIT' : 'ROLLBACK');
+        } catch (err) {
+          breadcrumb(`${write ? 'commit' : 'read rollback'} failed (sqlstate ${sqlstateOf(err)})`);
+          // A failing COMMIT is its own outcome, not a generic failure. Two
+          // cases hide here and the client side cannot tell them apart: the
+          // server refused the commit (a deferred constraint fired), or it
+          // committed and the acknowledgment was lost with the connection.
+          // Claiming "no changes were kept" would be a guess that invites the
+          // operator to repeat an insert that already landed.
+          if (write) return { ok: false, status: 500, code: 'failed', message: COMMIT_UNKNOWN };
+          // A read has nothing to commit: its rows were already fetched inside
+          // a READ ONLY transaction, so a failing close does not invalidate
+          // them. Report the rows, not a failure.
+        }
         return toResult(result);
       } catch (err) {
-        // Only the envelope's own statements (and connection faults) can land
-        // here — the handler maps its own failures into a status. None of these
-        // messages can carry a row value, but they can carry the connection
-        // URL, so they are redacted before being logged.
-        breadcrumb(`transaction failed: ${redact(errorText(err))}`);
+        // The envelope's own statements land here (the handler maps its own
+        // failures into a status). A statement-phase message may quote row
+        // values — a constraint trigger can raise one — so only the SQLSTATE is
+        // logged, never the text.
+        breadcrumb(`transaction failed (sqlstate ${sqlstateOf(err)})`);
         try {
           await client.query('ROLLBACK');
         } catch {
@@ -332,10 +372,18 @@ export async function openDataRunner(config: DataRunnerConfig): Promise<DataRunn
     ...(config.timeoutMs !== undefined ? { timeoutMs: config.timeoutMs } : {}),
   });
   const lookup = buildResourceLookup(context);
-  const pool = new Pool({ connectionString: config.url, max: POOL_MAX });
+  const pool = new Pool({
+    connectionString: config.url,
+    max: POOL_MAX,
+    // Acquiring a connection is outside `statement_timeout`, so without this a
+    // stalled network path would block an operation indefinitely — the parent's
+    // hang guard would fire while the worker stayed stuck on connect.
+    connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+  });
   // A pool whose idle client is dropped by the server emits 'error' on the
   // pool itself; without a listener that is an unhandled error event and takes
-  // the worker down mid-session.
+  // the worker down mid-session. An idle-connection error carries no row values
+  // (no statement is in flight), only possibly the connection URL.
   pool.on('error', (err) => {
     breadcrumb(`idle connection error: ${sanitizeErrorMessage(errorText(err), config.url)}`);
   });

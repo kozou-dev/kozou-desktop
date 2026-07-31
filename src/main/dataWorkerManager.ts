@@ -150,9 +150,19 @@ export class DataWorkerManager {
     const id = (this.nextRequestId += 1);
     const budget = operationBudgetMs(this.timeoutMs(name));
     return new Promise<DataResult>((resolve) => {
+      // A hang guard, not a cancellation: dropping the pending entry stops main
+      // waiting, but the worker's transaction keeps running under the database's
+      // own statement_timeout and a write may still commit afterwards. Cancelling
+      // it for real would need a second connection issuing pg_cancel_backend —
+      // deliberately not built here, so the message must not imply otherwise.
       const timer = setTimeout(() => {
         if (entry.pending.delete(id)) {
-          resolve(unavailable(`The operation did not finish within ${budget}ms.`, 504));
+          resolve(
+            unavailable(
+              `The operation did not finish within ${budget}ms. It may still be running on the database.`,
+              504,
+            ),
+          );
         }
       }, budget);
       entry.pending.set(id, (result) => {
@@ -266,9 +276,23 @@ export class DataWorkerManager {
         }
       });
     });
-    // The rejection is delivered to every caller that awaits `opened`; keep the
-    // promise itself from counting as unhandled before the first one arrives.
-    entry.opened.catch(() => {});
+    // A worker that failed to open must not become a permanent tombstone: it
+    // deliberately stays resident on failure (the parent owns termination), so
+    // leaving the entry in the registry would make every later operation await
+    // the same rejection even after the database recovers — and would leak its
+    // pool. Drop it and kill the child; the next operation forks a fresh one.
+    // This also handles the open-timeout case, where the worker may still be
+    // introspecting: killing it is what stops a late success from stranding a
+    // live pool behind a rejected entry.
+    //
+    // The handler doubles as the unhandled-rejection guard: `opened` must have
+    // a consumer before the first caller awaits it.
+    entry.opened.catch(() => {
+      if (this.entries.get(name) === entry) this.entries.delete(name);
+      entry.discarded = true;
+      this.settleAll(entry, 'The row data worker could not start.');
+      entry.child.kill();
+    });
 
     // Buffer each stream to line boundaries before filtering: a secret (or a
     // line) straddling a chunk boundary must not evade the scrub. Only the

@@ -96,6 +96,27 @@ class FakeClient implements DataClient {
   }
 }
 
+/** A client whose COMMIT (or closing ROLLBACK) fails the way a deferred
+ *  constraint does: after the statement itself succeeded, with a message that
+ *  quotes the row's own values. */
+class FailingCommitClient extends FakeClient {
+  override async query<R extends Record<string, unknown>>(
+    text: string,
+    values?: unknown[],
+  ): Promise<{ rows: R[]; rowCount: number | null }> {
+    if (text === 'COMMIT' || (text === 'ROLLBACK' && this.recorded.some((r) => r.text.startsWith('SELECT')))) {
+      this.recorded.push({ text });
+      const err = new Error(
+        'new row for relation "customers" violates check constraint: trigger says ada@example.com is invalid',
+      ) as Error & { code: string; severity: string };
+      err.code = '23514';
+      err.severity = 'ERROR';
+      throw err;
+    }
+    return super.query<R>(text, values);
+  }
+}
+
 function isEnvelope(text: string): boolean {
   return (
     text === 'BEGIN' ||
@@ -350,6 +371,57 @@ describe('data runner transaction envelope', () => {
     expect(result.status).toBe(403);
     expect(result.message).not.toContain('customers');
     expect(clients.every((c) => c.released)).toBe(true);
+  });
+
+  it('does not claim a lost COMMIT kept nothing, and logs only its SQLSTATE', async () => {
+    // A COMMIT can fail two ways that look identical from here: the server
+    // refused it (a deferred constraint), or it committed and the reply was
+    // lost. Reporting "no changes were kept" would invite a duplicate insert.
+    // The refusal case can also carry row VALUES — a constraint trigger doing
+    // RAISE EXCEPTION '... %', NEW.col — so nothing but the SQLSTATE is logged.
+    const written: string[] = [];
+    const spy = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation(((chunk: string | Uint8Array): boolean => {
+        written.push(String(chunk));
+        return true;
+      }) as typeof process.stderr.write);
+
+    const recorded: Recorded[] = [];
+    const pool: DataPool = {
+      connect: async () => new FailingCommitClient(recorded, [{ rows: [{ id: 1 }] }]),
+      end: async () => {},
+    };
+    const runner = createDataRunner({ pool, lookup: lookupOf(CUSTOMERS), capability: 'readwrite' });
+    const result = await runner.run({
+      kind: 'insert',
+      resource: 'customers',
+      values: { name: 'Ada', email: 'ada@example.com' },
+    });
+    spy.mockRestore();
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toMatch(/may or may not have been applied/i);
+    expect(result.message).not.toMatch(/No changes were kept/);
+    const log = written.join('');
+    expect(log).toContain('sqlstate 23514');
+    expect(log).not.toContain('ada@example.com');
+    expect(log).not.toContain('trigger says');
+  });
+
+  it('keeps a read result when only its closing ROLLBACK fails', async () => {
+    // A read has nothing to commit: its rows were already fetched inside a
+    // READ ONLY transaction, so a broken connection at close time does not
+    // invalidate them.
+    const recorded: Recorded[] = [];
+    const pool: DataPool = {
+      connect: async () => new FailingCommitClient(recorded, [{ rows: [{ id: 1 }] }]),
+      end: async () => {},
+    };
+    const runner = createDataRunner({ pool, lookup: lookupOf(CUSTOMERS), capability: 'read' });
+    const result = await runner.run({ kind: 'get', resource: 'customers', id: '1' });
+    expect(result).toEqual({ ok: true, status: 200, body: { id: 1 } });
   });
 
   it('pins the restated page-size ceiling against @kozou/api', () => {

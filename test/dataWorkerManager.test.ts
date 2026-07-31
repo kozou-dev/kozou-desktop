@@ -282,6 +282,56 @@ describe('DataWorkerManager', () => {
     expect(result.message).toContain('password authentication failed');
   });
 
+  it('recovers from a startup failure: the failed worker is dropped, the next call re-forks', async () => {
+    const { store, manager, children } = harness();
+    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
+    store.setRowAccess('a', 'read');
+
+    // A transient failure (the database was down, the password prompt was
+    // refused) must not become a tombstone: the worker stays resident on
+    // failure by design, so the entry has to go.
+    const failed = manager.run('a', LIST);
+    await settle();
+    children[0]!.openFailed('connection refused');
+    await failed;
+    await settle();
+    expect(children[0]!.killed).toBe(true);
+
+    // Second attempt after the database recovered.
+    const retry = manager.run('a', LIST);
+    await settle();
+    expect(children).toHaveLength(2);
+    children[1]!.opened();
+    await settle();
+    children[1]!.reply(0, { ok: true, status: 200, body: { rows: [] } });
+    await expect(retry).resolves.toEqual({ ok: true, status: 200, body: { rows: [] } });
+  });
+
+  it('warns that a timed-out operation may still be running', async () => {
+    // The 504 is a hang guard, not a cancellation — the message must not imply
+    // the write was stopped, because it was not.
+    vi.useFakeTimers();
+    try {
+      const { store, manager, children } = harness();
+      store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'], timeoutMs: 1_000 });
+      store.setRowAccess('a', 'readwrite');
+
+      const pending = manager.run('a', INSERT);
+      await vi.advanceTimersByTimeAsync(0);
+      children[0]!.opened();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(operationBudgetMs(1_000) + 10);
+
+      const result = await pending;
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.status).toBe(504);
+      expect(result.message).toMatch(/may still be running/i);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('kills every worker on quit', async () => {
     const { store, manager, children } = harness();
     for (const name of ['a', 'b']) {

@@ -48,12 +48,40 @@ describe('row-data input validation', () => {
     expect(() => validateValues({ prototype: 'x' })).toThrow(/prototype/);
   });
 
-  it('caps the payload size', () => {
+  it('caps the payload size, width and nesting depth', () => {
     const wide: Record<string, unknown> = {};
     for (let i = 0; i < 513; i++) wide[`c${i}`] = i;
     expect(() => validateValues(wide)).toThrow(/512 fields/);
 
-    expect(() => validateValues({ blob: 'x'.repeat(1_048_577) })).toThrow(/bytes of JSON/);
+    expect(() => validateValues({ blob: 'x'.repeat(1_048_577) })).toThrow(/bytes or/);
+
+    // Many medium strings add up: the cap is on the whole payload, not per field.
+    const heavy: Record<string, unknown> = {};
+    for (let i = 0; i < 100; i++) heavy[`c${i}`] = 'x'.repeat(20_000);
+    expect(() => validateValues(heavy)).toThrow(/bytes or/);
+
+    // A json column may nest, but not without bound.
+    let deep: unknown = 'leaf';
+    for (let i = 0; i < 20; i++) deep = { deep };
+    expect(() => validateValues({ doc: deep })).toThrow(/levels of nesting/);
+
+    // A realistic json value still passes.
+    expect(validateValues({ doc: { a: [1, 2, { b: 'c' }], d: null } })).toEqual({
+      doc: { a: [1, 2, { b: 'c' }], d: null },
+    });
+  });
+
+  it('caps list controls: filter count, and control-string length', () => {
+    const manyFilters: [string, string][] = [];
+    for (let i = 0; i < 65; i++) manyFilters.push([`c${i}`, 'eq.1']);
+    expect(() => validateListParams({ filters: manyFilters })).toThrow(/64 entries/);
+    expect(validateListParams({ filters: manyFilters.slice(0, 64) })?.filters).toHaveLength(64);
+
+    const long = 'x'.repeat(4_097);
+    expect(() => validateListParams({ sort: long })).toThrow(/4096 characters/);
+    expect(() => validateListParams({ search: long })).toThrow(/4096 characters/);
+    expect(() => validateListParams({ after: long })).toThrow(/4096 characters/);
+    expect(() => validateListParams({ filters: [['col', long]] })).toThrow(/4096 characters/);
   });
 
   it('normalizes list params and rejects out-of-range paging', () => {

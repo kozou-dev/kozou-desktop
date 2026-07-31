@@ -209,6 +209,37 @@ for (const { file, text } of readSources(join(ROOT, 'src'))) {
     }
   }
 }
+
+// -- 6. only the worker directory may hold a database driver ------------------
+// The marker scans above prove that @kozou/api's write path is unreachable from
+// main and from the read-only workers. They prove nothing about a hand-written
+// write: `pg` is a production dependency now, so main could open its own pool
+// and issue a DELETE with every marker scan still clean (measured — that is why
+// this check exists). Confining the driver to src/worker/ is what makes "the
+// write path lives in one process" a checkable statement rather than a habit.
+const DRIVER_MODULES = ['pg', 'pg-pool', 'pg-native', 'pg-cursor', 'postgres'];
+const driverViolations = [];
+for (const { file, text } of readSources(join(ROOT, 'src'))) {
+  if (file.startsWith('/src/worker/') || file.startsWith('src/worker/')) continue;
+  for (const mod of DRIVER_MODULES) {
+    const patterns = [
+      new RegExp(`from\\s*['"]${mod}['"]`),
+      new RegExp(`require\\s*\\(\\s*['"]${mod}['"]`),
+      new RegExp(`import\\s*\\(\\s*['"]${mod}['"]`),
+    ];
+    if (patterns.some((re) => re.test(text))) {
+      driverViolations.push(`${file}: imports the "${mod}" driver outside src/worker/`);
+    }
+  }
+}
+if (driverViolations.length > 0) {
+  console.error(
+    `SOURCE VIOLATION: a database driver outside the worker directory:\n  ${driverViolations.join('\n  ')}`,
+  );
+  failed = true;
+} else {
+  console.log('src sources: no database driver outside src/worker/');
+}
 if (serverViolations.length > 0) {
   console.error(
     `SOURCE VIOLATION: src must not start @kozou/api's HTTP server:\n  ${serverViolations.join('\n  ')}`,

@@ -13,9 +13,60 @@ import { DATA_MAX_PAGE_SIZE, type DataListParams } from '../shared/types.js';
  *  row, small enough that a runaway renderer cannot build a giant statement. */
 const MAX_VALUE_FIELDS = 512;
 
-/** Cap on the JSON size of one row payload (1 MiB). A row edit is typed by a
- *  human; this only rules out a payload nobody meant to send. */
+/** Cap on the approximate size of one row payload (1 MiB). A row edit is typed
+ *  by a human; this only rules out a payload nobody meant to send. Measured by
+ *  a bounded walk rather than by serializing first — `JSON.stringify` would have
+ *  to allocate the whole thing before it could be judged too large, which is the
+ *  cost the cap exists to avoid. */
 const MAX_VALUES_BYTES = 1_048_576;
+
+/** Nesting depth allowed inside a value (a json/jsonb column). Deep enough for
+ *  any realistic document, shallow enough that the walk cannot be turned into a
+ *  stack-exhaustion lever. */
+const MAX_VALUE_DEPTH = 16;
+
+/** Cap on filters per list request. The grammar allows several per column; this
+ *  bounds the whole set so one IPC message cannot make main (and then the
+ *  worker) parse an unbounded predicate list. */
+const MAX_FILTERS = 64;
+
+/** Cap on a single control string (sort spec, search text, keyset cursor). A
+ *  lossless cursor over a composite key is the longest legitimate one and stays
+ *  far below this. */
+const MAX_CONTROL_CHARS = 4_096;
+
+/** Approximate the serialized size of a value, stopping as soon as the budget
+ *  is blown so an oversized payload is rejected without ever being measured in
+ *  full. Returns the bytes counted, or null when the budget or the depth limit
+ *  is exceeded. */
+function approximateSize(value: unknown, depth: number, budget: number): number | null {
+  if (depth > MAX_VALUE_DEPTH) return null;
+  if (value === null || typeof value === 'boolean') return 4;
+  if (typeof value === 'number') return 8;
+  if (typeof value === 'string') return value.length > budget ? null : value.length + 2;
+  if (Array.isArray(value)) {
+    let total = 2;
+    for (const item of value) {
+      const size = approximateSize(item, depth + 1, budget - total);
+      if (size === null) return null;
+      total += size + 1;
+      if (total > budget) return null;
+    }
+    return total;
+  }
+  if (typeof value === 'object') {
+    let total = 2;
+    for (const [key, item] of Object.entries(value)) {
+      const size = approximateSize(item, depth + 1, budget - total - key.length);
+      if (size === null) return null;
+      total += key.length + 3 + size;
+      if (total > budget) return null;
+    }
+    return total;
+  }
+  // undefined / function / symbol: not JSON, and dropped or rejected above.
+  return 0;
+}
 
 /** Keys that would reach Object.prototype rather than the row. */
 const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -61,14 +112,10 @@ export function validateValues(x: unknown): Record<string, unknown> {
   if (fields > MAX_VALUE_FIELDS) {
     throw new Error(`row values must not exceed ${MAX_VALUE_FIELDS} fields`);
   }
-  let serialized: string;
-  try {
-    serialized = JSON.stringify(values);
-  } catch {
-    throw new Error('row values must be JSON-serializable');
-  }
-  if (Buffer.byteLength(serialized, 'utf8') > MAX_VALUES_BYTES) {
-    throw new Error(`row values must not exceed ${MAX_VALUES_BYTES} bytes of JSON`);
+  if (approximateSize(values, 0, MAX_VALUES_BYTES) === null) {
+    throw new Error(
+      `row values must not exceed ${MAX_VALUES_BYTES} bytes or ${MAX_VALUE_DEPTH} levels of nesting`,
+    );
   }
   return values;
 }
@@ -96,10 +143,16 @@ export function validateListParams(x: unknown): DataListParams | undefined {
     const value = p[key];
     if (value === undefined) continue;
     if (typeof value !== 'string') throw new Error(`${key} must be a string`);
+    if (value.length > MAX_CONTROL_CHARS) {
+      throw new Error(`${key} must not exceed ${MAX_CONTROL_CHARS} characters`);
+    }
     params[key] = value;
   }
   if (p.filters !== undefined) {
     if (!Array.isArray(p.filters)) throw new Error('filters must be an array of [column, expression] pairs');
+    if (p.filters.length > MAX_FILTERS) {
+      throw new Error(`filters must not exceed ${MAX_FILTERS} entries`);
+    }
     const filters: [string, string][] = [];
     for (const pair of p.filters) {
       if (
@@ -110,6 +163,9 @@ export function validateListParams(x: unknown): DataListParams | undefined {
         typeof pair[1] !== 'string'
       ) {
         throw new Error('each filter must be a [column, expression] pair of strings');
+      }
+      if (pair[0].length > MAX_CONTROL_CHARS || pair[1].length > MAX_CONTROL_CHARS) {
+        throw new Error(`a filter column and expression must not exceed ${MAX_CONTROL_CHARS} characters`);
       }
       filters.push([pair[0], pair[1]]);
     }
