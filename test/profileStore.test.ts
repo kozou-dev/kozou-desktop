@@ -319,6 +319,25 @@ describe('ProfileStore row access', () => {
     expect(store.rowAccess('a')).toBe('off');
   });
 
+  it('keeps a grant when the same schema set is merely reordered or repeated', () => {
+    const { store } = freshStore();
+    store.upsert({ name: 'a', url: base.url, schemas: ['public', 'sales'] });
+    store.setRowAccess('a', 'readwrite');
+
+    // Order does not decide which rows are reachable: a bare relation name is
+    // registered only when it is unique across the introspected schemas, and
+    // this app addresses relations by qualified name. Revoking here would cost
+    // an approval for an edit that changed nothing.
+    store.upsert({ name: 'a', url: base.url, schemas: ['sales', 'public'] });
+    expect(store.rowAccess('a')).toBe('readwrite');
+    store.upsert({ name: 'a', url: base.url, schemas: ['public', 'sales', 'public'] });
+    expect(store.rowAccess('a')).toBe('readwrite');
+
+    // Adding a schema is still a change of what the grant reaches.
+    store.upsert({ name: 'a', url: base.url, schemas: ['public', 'sales', 'ops'] });
+    expect(store.rowAccess('a')).toBe('off');
+  });
+
   it('re-grants normally after a connection edit dropped the grant', () => {
     const { store } = freshStore();
     store.upsert({ name: 'a', ...base });

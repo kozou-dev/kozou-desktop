@@ -13,7 +13,9 @@
 //      deliberately not pre-flighted) — and neither the returned message nor
 //      anything written to stderr contains the offending value;
 //   5. a value larger than the wire budget is cut out of a browse page and
-//      reported, while the same row read through `get` stays whole.
+//      reported, while the same row read through `get` stays whole — and a
+//      cursor built from an oversized ordering value is withheld rather than
+//      handed back for a hop main would refuse.
 //
 // The statement *sequence* the runner issues is pinned by the unit suite
 // (dataRunner.test.ts) with a fake pool; together the two cover the read-only
@@ -24,7 +26,11 @@
 
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { DATA_VALUE_BUDGET, type DataResult } from '../src/shared/types.js';
+import {
+  DATA_MAX_CONTROL_CHARS,
+  DATA_VALUE_BUDGET,
+  type DataResult,
+} from '../src/shared/types.js';
 import { openDataRunner, type DataRunner } from '../src/worker/runData.js';
 
 const url = process.env.KOZOU_TEST_DATABASE_URL;
@@ -152,6 +158,47 @@ describe.skipIf(!url)('row data against a real database', () => {
       if (!full.ok) return;
       expect((row(full).name as string).length).toBe(size);
       expect(full.truncated).toBeUndefined();
+    } finally {
+      await pool.query('DELETE FROM customers WHERE email = $1', [BULK_MARK]);
+    }
+  });
+
+  it('withholds a real cursor built from an oversized ordering value', async () => {
+    // The second way a row value can leave the worker. @kozou/api builds a
+    // cursor from the boundary row's ORDER BY values, so sorting by a large text
+    // column carries its full length inside the cursor even though the cell was
+    // cut. Measured before this guard existed: a 2,048-character value produced
+    // a 2,799-character cursor. Past DATA_MAX_CONTROL_CHARS main would refuse
+    // the cursor on the next hop, so the walk has to end here and say so.
+    const size = DATA_MAX_CONTROL_CHARS;
+    // Leading '0' so the row sorts first ascending under any collation the test
+    // database happens to use — digits precede letters in both C and en_US, while
+    // 'c' versus 'Grace' flips between them. The boundary row of page 1 has to be
+    // this row for the cursor under test to be built from its value.
+    await pool.query("INSERT INTO customers (name, email) VALUES ('0' || repeat($1, $2), $3)", [
+      'c',
+      size - 1,
+      BULK_MARK,
+    ]);
+    try {
+      const page = await readRunner.run({
+        kind: 'list',
+        resource: 'customers',
+        params: { pageSize: 1, sort: 'name.asc' },
+      });
+      expect(page.ok).toBe(true);
+      if (!page.ok) return;
+      const body = page.body as { rows: Record<string, unknown>[]; nextCursor: unknown };
+      expect((body.rows[0]!.name as string).startsWith('0c')).toBe(true);
+      expect((body.rows[0]!.name as string).length).toBe(DATA_VALUE_BUDGET);
+      expect(page.truncated?.[0]).toEqual({
+        row: 0,
+        column: 'name',
+        kind: 'text',
+        size,
+      });
+      expect(page.droppedCursors).toEqual(['next']);
+      expect(body.nextCursor).toBeNull();
     } finally {
       await pool.query('DELETE FROM customers WHERE email = $1', [BULK_MARK]);
     }

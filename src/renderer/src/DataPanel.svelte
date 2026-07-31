@@ -19,7 +19,9 @@
   //   * This pane is a preview, not a viewer. The worker cuts values that
   //     exceed DATA_VALUE_BUDGET before a page is serialized, so nothing here
   //     can show a large value in full — and every cut is reported and shown
-  //     rather than left to look like the value.
+  //     rather than left to look like the value. The same limit applies to the
+  //     cursors: sorting by a column whose values are too large to fit one ends
+  //     the walk, and the pane says so instead of offering a dead button.
 
   import type { ColumnView } from '../../shared/contextView';
   import {
@@ -98,6 +100,12 @@
   const cutsByCell = (list: DataTruncation[] | undefined): Map<string, DataTruncation> =>
     new Map((list ?? []).map((cut) => [cutKey(cut.row, cut.column), cut]));
 
+  /** Directions the worker refused to hand a cursor for, because the boundary
+   *  row's ordering value would not fit one. The button is dead either way —
+   *  there is no cursor — and this is what turns that into an explanation
+   *  instead of a pager that just stops. */
+  let droppedCursors = $state<('next' | 'prev')[]>([]);
+
   const atStart = $derived(pos.after === null && pos.before === null);
 
   /** Only the newest request may write to the panel. Bumped on every load, so
@@ -154,6 +162,7 @@
       loaded = true;
       rows = [];
       cuts = new Map();
+      droppedCursors = [];
       error = message(err);
       return;
     }
@@ -163,6 +172,7 @@
     if (!result.ok) {
       rows = [];
       cuts = new Map();
+      droppedCursors = [];
       nextCursor = null;
       prevCursor = null;
       error = result.message;
@@ -172,6 +182,7 @@
     if (page === null) {
       rows = [];
       cuts = new Map();
+      droppedCursors = [];
       nextCursor = null;
       prevCursor = null;
       error = 'The database returned rows in a shape this build does not understand.';
@@ -179,6 +190,7 @@
     }
     rows = page.rows;
     cuts = cutsByCell(result.truncated);
+    droppedCursors = result.droppedCursors ?? [];
     nextCursor = page.nextCursor;
     prevCursor = page.prevCursor;
     pos = target;
@@ -249,8 +261,19 @@
   function cutNote(cut: DataTruncation): string {
     if (cut.kind === 'text') return `Truncated by this app: ${cut.size} characters in the database.`;
     if (cut.kind === 'bytes') return `Truncated by this app: ${cut.size} bytes in the database.`;
-    return `Not shown: a json value larger than ${cut.size} bytes.`;
+    if (cut.kind === 'json') return `Not shown: a json value larger than ${cut.size} characters.`;
+    // Deliberately not phrased as "too large": its size was never established,
+    // which is exactly why it was not carried.
+    return 'Not shown: this app could not establish how large this value is.';
   }
+
+  /** A cell whose value did not travel at all, so the cell has to say what is
+   *  missing rather than render a null the database never returned. */
+  const dropped = (cut: DataTruncation | undefined): boolean =>
+    cut !== undefined && (cut.kind === 'json' || cut.kind === 'unmeasurable');
+
+  const droppedLabel = (cut: DataTruncation): string =>
+    cut.kind === 'json' ? '(json value too large)' : '(value not measurable)';
 
   first();
 </script>
@@ -318,6 +341,13 @@
       characters or bytes, and a larger json value is dropped. This pane is a preview, not a viewer.
     </p>
   {/if}
+  {#if droppedCursors.length > 0}
+    <p class="note" data-testid="data-cursor-limit">
+      The walk stops here ({droppedCursors.join(' and ')}): a page cursor carries the sort values of
+      the row it stops at, and this one is too large to hand back. Sort by another column, or start
+      again from the first page.
+    </p>
+  {/if}
 
   {#if error}
     <p class="err" data-testid="data-error">{error}</p>
@@ -347,11 +377,11 @@
               {#each columns as c (c.name)}
                 {@const cut = cuts.get(cutKey(i, c.name))}
                 <td>
-                  {#if cut !== undefined && cut.kind === 'json'}
+                  {#if cut !== undefined && dropped(cut)}
                     <!-- The value was replaced by null on the way here, so this
                          must not be rendered as a NULL the database returned. -->
                     <span class="dropped" data-testid="data-cut" title={cutNote(cut)}
-                      >(json value too large)</span
+                      >{droppedLabel(cut)}</span
                     >
                   {:else if row[c.name] === null || row[c.name] === undefined}
                     <span class="null">NULL</span>

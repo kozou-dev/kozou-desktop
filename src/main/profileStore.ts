@@ -84,13 +84,24 @@ function sanitizeRowAccess(x: unknown): 'read' | 'readwrite' | undefined {
  *  invalidates that approval" must not drift apart. A password rotation on an
  *  otherwise identical URL deliberately does not count (same server, same
  *  database, same role); adding or removing a stored password does, because it
- *  changes which credentials the grant would be exercised with. */
+ *  changes which credentials the grant would be exercised with.
+ *
+ *  The schema list is compared as a SET: sorted and de-duplicated for the
+ *  comparison only, leaving the stored order untouched. Order does not change
+ *  which rows are reachable — @kozou/api registers a bare relation name only
+ *  when it is unique across the introspected schemas, so a collision is
+ *  unaddressable rather than resolved by list order, and this app addresses
+ *  relations by qualified name anyway. Treating a reorder as a new database
+ *  would revoke a capability for an edit that changed nothing. */
 export function rowAccessIdentity(profile: {
   url: string;
   schemas: readonly string[];
   hasPassword: boolean;
 }): string {
-  return JSON.stringify([profile.url, profile.schemas, profile.hasPassword]);
+  const schemas = Array.isArray(profile.schemas)
+    ? [...new Set(profile.schemas)].sort()
+    : profile.schemas;
+  return JSON.stringify([profile.url, schemas, profile.hasPassword]);
 }
 
 /** Validate an untrusted row-access level (IPC input) before it can reach

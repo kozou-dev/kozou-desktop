@@ -7,7 +7,11 @@
 // decided by the worker's resource lookup, which is built from the database
 // itself; that is the allowlist, and it is not restated here.
 
-import { DATA_MAX_PAGE_SIZE, type DataListParams } from '../shared/types.js';
+import {
+  DATA_MAX_CONTROL_CHARS,
+  DATA_MAX_PAGE_SIZE,
+  type DataListParams,
+} from '../shared/types.js';
 
 /** Cap on the fields in one row payload. Generous next to any hand-edited
  *  row, small enough that a runaway renderer cannot build a giant statement. */
@@ -30,10 +34,11 @@ const MAX_VALUE_DEPTH = 16;
  *  worker) parse an unbounded predicate list. */
 const MAX_FILTERS = 64;
 
-/** Cap on a single control string (sort spec, search text, keyset cursor). A
- *  lossless cursor over a composite key is the longest legitimate one and stays
- *  far below this. */
-const MAX_CONTROL_CHARS = 4_096;
+/** Cap on a single control string (sort spec, search text, keyset cursor).
+ *  Shared with the worker, which refuses to hand OUT a cursor longer than this:
+ *  restating it in one process only would let the two drift into a state where
+ *  the app offers a hop it then rejects. */
+const MAX_CONTROL_CHARS = DATA_MAX_CONTROL_CHARS;
 
 /** Approximate the serialized size of a value, stopping as soon as the budget
  *  is blown so an oversized payload is rejected without ever being measured in
