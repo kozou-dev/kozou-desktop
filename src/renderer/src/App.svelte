@@ -153,16 +153,28 @@
     if (rowAccessPending !== null) return;
     formError = null;
     rowAccessPending = name;
+    let applied: RowAccess | undefined;
     try {
-      await api.requestRowAccess(name, level);
+      applied = await api.requestRowAccess(name, level);
     } catch (err) {
       formError = message(err);
     } finally {
       rowAccessPending = null;
     }
+    // The returned value is the level in force in main's store afterwards, so
+    // apply it here rather than waiting on a second round trip. The badge is
+    // the only warning that a grant is live (revoking is prompt-free by
+    // decision, so nothing else announces the level), and a badge that lags —
+    // or that a failed refresh leaves lagging for good — is exactly the failure
+    // that control exists to prevent. A rejection needs no fallback: every
+    // throw on that path happens before the store is written, so the level the
+    // card already shows is still the level in force.
+    if (applied !== undefined) {
+      profiles = profiles.map((p) => (p.name === name ? { ...p, rowAccess: applied } : p));
+    }
     try {
-      // Re-read rather than trust the returned level: the store is the only
-      // authority, and a profile deleted while the prompt was open is gone.
+      // Then reconcile: the profile may have been deleted while the prompt was
+      // open, and the store is the authority on what still exists.
       profiles = await api.listProfiles();
     } catch (err) {
       formError = message(err);

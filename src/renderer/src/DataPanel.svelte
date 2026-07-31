@@ -46,19 +46,32 @@
 
   const keyset = $derived(primaryKey.length > 0);
 
+  /** Columns offered for sorting. The REST layer's sort grammar splits on
+   *  commas and has no identifier escaping, so a column whose name contains one
+   *  cannot be expressed in it — offering it would only ever produce a 400. */
+  const sortable = $derived(columns.filter((c) => !c.name.includes(',')));
+  const unsortable = $derived(columns.length - sortable.length);
+
   let pageSize = $state(25);
   let sortColumn = $state('');
   let sortDir = $state<'asc' | 'desc'>('asc');
-  let after = $state<string | null>(null);
-  let before = $state<string | null>(null);
+
+  /** Where the rows on screen came from. Committed only when a page lands, so a
+   *  failed navigation leaves the panel describing what it is actually showing
+   *  — otherwise a reload would fetch the page we failed to reach and label it
+   *  with the page number we never left. */
+  type Position = { after: string | null; before: string | null; page: number };
+  const START: Position = { after: null, before: null, page: 1 };
+  let pos = $state<Position>(START);
 
   let rows = $state<Record<string, unknown>[]>([]);
   let nextCursor = $state<string | null>(null);
   let prevCursor = $state<string | null>(null);
-  let pageNo = $state(1);
   let loading = $state(false);
   let error = $state<string | null>(null);
   let loaded = $state(false);
+
+  const atStart = $derived(pos.after === null && pos.before === null);
 
   /** Only the newest request may write to the panel. Bumped on every load, so
    *  a slow first page cannot overwrite the page the operator has moved on to. */
@@ -88,19 +101,20 @@
 
   const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
-  /** `target` is the position this request navigates to. It is applied only
-   *  once the rows land: advancing the counter on the click would label the
-   *  page still on screen as the next one, which is both a lie and a way for a
-   *  reader to attribute rows to the wrong page. */
-  async function load(target: number = pageNo): Promise<void> {
+  /** `target` is the position this request navigates to. Nothing about it is
+   *  committed until the rows land: advancing on the click would label the page
+   *  still on screen as the next one, and leaving the cursor behind on a failure
+   *  would make the next reload fetch the page we failed to reach under the page
+   *  number we never left. */
+  async function load(target: Position): Promise<void> {
     const mine = ++seq;
     loading = true;
     error = null;
     const params: DataListParams = {
       pageSize,
       ...(sortSpec !== undefined ? { sort: sortSpec } : {}),
-      ...(after !== null ? { after } : {}),
-      ...(before !== null ? { before } : {}),
+      ...(target.after !== null ? { after: target.after } : {}),
+      ...(target.before !== null ? { before: target.before } : {}),
     };
     let result: DataResult;
     try {
@@ -136,29 +150,29 @@
     rows = page.rows;
     nextCursor = page.nextCursor;
     prevCursor = page.prevCursor;
-    pageNo = target;
+    pos = target;
   }
 
-  /** Restart the traversal: used on mount and whenever a control that the
-   *  cursors depend on changes. */
+  /** Restart the traversal: used on mount, whenever a control the cursors
+   *  depend on changes, and as the way out of a position with no cursors —
+   *  a page that came back empty (every row past the boundary was deleted)
+   *  yields neither a next nor a prev, so "back to the start" has to exist. */
   function first(): void {
-    after = null;
-    before = null;
-    void load(1);
+    void load(START);
   }
 
   function next(): void {
     if (nextCursor === null) return;
-    after = nextCursor;
-    before = null;
-    void load(pageNo + 1);
+    void load({ after: nextCursor, before: null, page: pos.page + 1 });
   }
 
   function prev(): void {
     if (prevCursor === null) return;
-    before = prevCursor;
-    after = null;
-    void load(Math.max(1, pageNo - 1));
+    void load({ after: null, before: prevCursor, page: Math.max(1, pos.page - 1) });
+  }
+
+  function reload(): void {
+    void load(pos);
   }
 
   function changeSort(column: string): void {
@@ -211,14 +225,17 @@
         onchange={(e) => changeSort(e.currentTarget.value)}
       >
         <option value="">(default order)</option>
-        {#each columns as c (c.name)}
+        {#each sortable as c (c.name)}
           <option value={c.name}>{c.name}</option>
         {/each}
       </select>
     </label>
+    <!-- Disabled under "(default order)": no sort is sent then, so an enabled
+         direction would report one the rows do not have. -->
     <select
       data-testid="data-sort-dir"
       value={sortDir}
+      disabled={sortColumn === ''}
       onchange={(e) => changeDir(e.currentTarget.value as 'asc' | 'desc')}
     >
       <option value="asc">asc</option>
@@ -236,13 +253,22 @@
         {/each}
       </select>
     </label>
-    <button data-testid="data-reload" onclick={() => void load()} disabled={loading}>reload</button>
+    <button data-testid="data-reload" onclick={reload} disabled={loading}>reload</button>
+    {#if !atStart}
+      <button data-testid="data-first" onclick={first} disabled={loading}>&laquo; first page</button>
+    {/if}
   </div>
 
   {#if !keyset}
     <p class="note" data-testid="data-no-keyset">
       No primary key, so this relation has no total order and kozou offers no page cursors - the
       first {pageSize} rows in the chosen order are all this pane can reach.
+    </p>
+  {/if}
+  {#if unsortable > 0}
+    <p class="note" data-testid="data-unsortable">
+      {unsortable} column{unsortable === 1 ? '' : 's'} cannot be sorted here: the sort grammar
+      separates columns with commas, and their names contain one.
     </p>
   {/if}
 
@@ -293,7 +319,7 @@
       <button data-testid="data-prev" onclick={prev} disabled={loading || prevCursor === null}
         >&larr; prev</button
       >
-      <span class="pos" data-testid="data-position">page {pageNo} - {rows.length} rows</span>
+      <span class="pos" data-testid="data-position">page {pos.page} - {rows.length} rows</span>
       <button data-testid="data-next" onclick={next} disabled={loading || nextCursor === null}
         >next &rarr;</button
       >
@@ -333,7 +359,8 @@
   .controls button {
     cursor: pointer;
   }
-  .controls button:disabled {
+  .controls button:disabled,
+  .controls select:disabled {
     color: #aaa;
     cursor: default;
   }
