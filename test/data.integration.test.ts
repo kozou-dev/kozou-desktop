@@ -11,7 +11,9 @@
 //      successful insert on the same worker;
 //   4. an invalid date reaches PostgreSQL as a class-22 error (it is
 //      deliberately not pre-flighted) — and neither the returned message nor
-//      anything written to stderr contains the offending value.
+//      anything written to stderr contains the offending value;
+//   5. a value larger than the wire budget is cut out of a browse page and
+//      reported, while the same row read through `get` stays whole.
 //
 // The statement *sequence* the runner issues is pinned by the unit suite
 // (dataRunner.test.ts) with a fake pool; together the two cover the read-only
@@ -22,7 +24,7 @@
 
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { DataResult } from '../src/shared/types.js';
+import { DATA_VALUE_BUDGET, type DataResult } from '../src/shared/types.js';
 import { openDataRunner, type DataRunner } from '../src/worker/runData.js';
 
 const url = process.env.KOZOU_TEST_DATABASE_URL;
@@ -30,6 +32,10 @@ const url = process.env.KOZOU_TEST_DATABASE_URL;
 /** Marker on every row this suite creates, so cleanup can find them even if a
  *  test fails half way through. */
 const MARK = 'data-integration@example.test';
+
+/** Its own marker: `email` is UNIQUE, so the oversized row must not collide
+ *  with the rows the mutation tests insert and delete under MARK. */
+const BULK_MARK = 'data-integration-bulk@example.test';
 
 type PgErrorLike = { code?: string };
 
@@ -63,7 +69,7 @@ describe.skipIf(!url)('row data against a real database', () => {
 
   afterAll(async () => {
     await pool?.query('DELETE FROM orders WHERE customer_id IN (SELECT id FROM customers WHERE email = $1)', [MARK]);
-    await pool?.query('DELETE FROM customers WHERE email = $1', [MARK]);
+    await pool?.query('DELETE FROM customers WHERE email = ANY($1)', [[MARK, BULK_MARK]]);
     await pool?.end();
     await readRunner?.close();
     await writeRunner?.close();
@@ -113,6 +119,42 @@ describe.skipIf(!url)('row data against a real database', () => {
     expect(rowsOf(result).length).toBeGreaterThan(0);
     // count=none is unconditional, so a page carries no total.
     expect(totalOf(result)).toBeNull();
+  });
+
+  it('cuts an oversized value out of a real page, and hands the same row over in full on a get', async () => {
+    const size = DATA_VALUE_BUDGET * 3;
+    await pool.query('INSERT INTO customers (name, email) VALUES (repeat($1, $2), $3)', [
+      'x',
+      size,
+      BULK_MARK,
+    ]);
+    try {
+      const page = await readRunner.run({
+        kind: 'list',
+        resource: 'customers',
+        params: { filters: [['email', `eq.${BULK_MARK}`]] },
+      });
+      expect(page.ok).toBe(true);
+      if (!page.ok) return;
+      const rows = rowsOf(page);
+      expect(rows).toHaveLength(1);
+      expect((rows[0]!.name as string).length).toBe(DATA_VALUE_BUDGET);
+      expect(page.truncated).toEqual([{ row: 0, column: 'name', kind: 'text', size }]);
+
+      // The other half of the rule: a single row is bounded by being one row, so
+      // the value stays whole on the path an editor reads through.
+      const full = await readRunner.run({
+        kind: 'get',
+        resource: 'customers',
+        id: String(rows[0]!.id),
+      });
+      expect(full.ok).toBe(true);
+      if (!full.ok) return;
+      expect((row(full).name as string).length).toBe(size);
+      expect(full.truncated).toBeUndefined();
+    } finally {
+      await pool.query('DELETE FROM customers WHERE email = $1', [BULK_MARK]);
+    }
   });
 
   it('refuses a mutation on a read runner and leaves the table unchanged', async () => {
