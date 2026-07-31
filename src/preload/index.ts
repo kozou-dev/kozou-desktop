@@ -2,7 +2,7 @@
 // process. Exposes a typed, minimal API — no raw ipcRenderer, no Node.
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
-import type { KozouDesktopApi, McpMode, McpStatusEntry, ProfileInput } from '../shared/types.js';
+import type { KozouDesktopApi, McpMode, McpStatusEntry, ProfileInput, RowAccess } from '../shared/types.js';
 import { IPC } from '../shared/types.js';
 
 const api: KozouDesktopApi = {
@@ -16,6 +16,7 @@ const api: KozouDesktopApi = {
   mcpStop: (name: string) => ipcRenderer.invoke(IPC.mcpStop, name),
   mcpStatus: () => ipcRenderer.invoke(IPC.mcpStatus),
   mcpReassignPort: (name: string) => ipcRenderer.invoke(IPC.mcpReassignPort, name),
+  requestRowAccess: (name: string, level: RowAccess) => ipcRenderer.invoke(IPC.dataSetRowAccess, name, level),
   onMcpStatusChanged: (listener: (entries: McpStatusEntry[]) => void) => {
     const wrapped = (_e: IpcRendererEvent, entries: McpStatusEntry[]): void => listener(entries);
     ipcRenderer.on(IPC.mcpStatusChanged, wrapped);
