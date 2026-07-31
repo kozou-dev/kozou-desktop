@@ -19,12 +19,20 @@ function freshStore(): ProfileStore {
   return store;
 }
 
+type ApprovalRequest = { profile: string; level: 'read' | 'readwrite'; connection: string };
+
 /** Records what the native dialog would have been asked, and answers with a
- *  canned verdict. */
-function approver(verdict: boolean): RowAccessApproval & { calls: { profile: string; level: string }[] } {
-  const calls: { profile: string; level: string }[] = [];
-  const fn = (request: { profile: string; level: 'read' | 'readwrite' }): Promise<boolean> => {
+ *  canned verdict. `during` stands in for everything that can happen while a
+ *  real dialog is open: it does not block main's event loop, so the profile
+ *  handlers keep running. */
+function approver(
+  verdict: boolean,
+  during?: () => void,
+): RowAccessApproval & { calls: ApprovalRequest[] } {
+  const calls: ApprovalRequest[] = [];
+  const fn = (request: ApprovalRequest): Promise<boolean> => {
     calls.push({ ...request });
+    during?.();
     return Promise.resolve(verdict);
   };
   return Object.assign(fn, { calls });
@@ -36,7 +44,7 @@ describe('requestRowAccessChange (escalation requires native approval)', () => {
     const declined = approver(false);
     expect(await requestRowAccessChange(store, declined, 'a', 'readwrite')).toBe('off');
     expect(store.rowAccess('a')).toBe('off');
-    expect(declined.calls).toEqual([{ profile: 'a', level: 'readwrite' }]);
+    expect(declined.calls).toEqual([{ profile: 'a', level: 'readwrite', connection: base.url }]);
     // The same holds for the intermediate level, and from a granted level.
     expect(await requestRowAccessChange(store, declined, 'a', 'read')).toBe('off');
     expect(store.rowAccess('a')).toBe('off');
@@ -52,9 +60,11 @@ describe('requestRowAccessChange (escalation requires native approval)', () => {
     expect(store.rowAccess('a')).toBe('read');
     expect(await requestRowAccessChange(store, approved, 'a', 'readwrite')).toBe('readwrite');
     expect(store.rowAccess('a')).toBe('readwrite');
+    // The prompt is told which database the grant would reach, so the user
+    // approves a connection rather than a renderer-chosen label.
     expect(approved.calls).toEqual([
-      { profile: 'a', level: 'read' },
-      { profile: 'a', level: 'readwrite' },
+      { profile: 'a', level: 'read', connection: base.url },
+      { profile: 'a', level: 'readwrite', connection: base.url },
     ]);
   });
 
@@ -81,6 +91,49 @@ describe('requestRowAccessChange (escalation requires native approval)', () => {
     await expect(requestRowAccessChange(store, never, ['a'], 'read')).rejects.toThrow(/name must be a string/);
     await expect(requestRowAccessChange(store, never, 'nope', 'read')).rejects.toThrow(/unknown profile/);
     expect(never.calls).toEqual([]);
+    expect(store.rowAccess('a')).toBe('off');
+  });
+
+  it('refuses to grant when the profile was swapped while the dialog was open', async () => {
+    // A dialog does not block main's event loop: the profile handlers keep
+    // serving the renderer. Substituting the record behind the same name
+    // would otherwise land the approval on a database the user never saw —
+    // by delete-and-recreate, by an in-place edit of the connection, or by
+    // widening the schemas the grant reaches. Each starts from its own
+    // store, since the first substitution would otherwise become the
+    // baseline for the next.
+    const substitutions: ((store: ProfileStore) => void)[] = [
+      (store) => {
+        store.remove('a');
+        store.upsert({ name: 'a', url: 'postgresql://u@elsewhere:5432/other', schemas: ['public'] });
+      },
+      (store) => store.upsert({ name: 'a', url: 'postgresql://u@elsewhere:5432/other', schemas: ['public'] }),
+      (store) => store.upsert({ name: 'a', ...base, schemas: ['public', 'sales'] }),
+      (store) => store.upsert({ name: 'a', url: 'postgresql://u:pw@h:5432/db', schemas: ['public'] }),
+    ];
+    for (const substitute of substitutions) {
+      const store = freshStore();
+      const swap = approver(true, () => substitute(store));
+      await expect(requestRowAccessChange(store, swap, 'a', 'readwrite')).rejects.toThrow(
+        /changed while its approval/,
+      );
+      expect(store.rowAccess('a')).toBe('off');
+      expect(swap.calls[0]!.connection).toBe(base.url);
+    }
+    // Deleting outright fails closed too, rather than resurrecting a record.
+    const store = freshStore();
+    const deleted = approver(true, () => store.remove('a'));
+    await expect(requestRowAccessChange(store, deleted, 'a', 'read')).rejects.toThrow(/unknown profile/);
+  });
+
+  it('reports the level in force when a concurrent change outruns a declined dialog', async () => {
+    const store = freshStore();
+    store.setRowAccess('a', 'read');
+    // Escalation is declined, but a second request revoked the grant while
+    // the dialog was open — returning the level captured beforehand would
+    // tell the renderer it still has 'read'.
+    const declined = approver(false, () => store.setRowAccess('a', 'off'));
+    expect(await requestRowAccessChange(store, declined, 'a', 'readwrite')).toBe('off');
     expect(store.rowAccess('a')).toBe('off');
   });
 
@@ -117,5 +170,17 @@ describe('assertRowAccess (main-side guard for data:* IPC)', () => {
     store.setRowAccess('a', 'readwrite');
     expect(() => assertRowAccess(store, 'nope', 'read')).toThrow(/unknown profile/);
     expect(() => assertRowAccess(store, ['a'] as unknown as string, 'read')).toThrow(/name must be a string/);
+  });
+
+  it('refuses an unrecognized required level instead of waving it through', () => {
+    const store = freshStore();
+    // A future caller computing `need` must not be able to satisfy the guard
+    // with a value outside the ladder — an unknown level compares as neither
+    // greater nor smaller.
+    for (const need of ['write', 'all', '', undefined, null]) {
+      expect(() => assertRowAccess(store, 'a', need as unknown as 'read')).toThrow(/must be "read" or "readwrite"/);
+    }
+    store.setRowAccess('a', 'readwrite');
+    expect(() => assertRowAccess(store, 'a', 'admin' as unknown as 'read')).toThrow(/must be "read" or "readwrite"/);
   });
 });

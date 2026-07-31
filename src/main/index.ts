@@ -71,8 +71,10 @@ const safeStorageEncryptor: Encryptor = {
 /** The trust anchor for a row-access escalation: a native dialog drawn by
  *  main, modal to the window. Never a renderer modal — a compromised renderer
  *  could draw and "click" its own. Approval is the affirmative button only;
- *  Esc and the window close both land on cancelId. */
-const rowAccessApproval: RowAccessApproval = async ({ profile, level }) => {
+ *  Esc and the window close both land on cancelId. The prompt names the
+ *  database, not just the profile: the profile is a label the renderer can
+ *  change, the connection is what the grant actually reaches. */
+const rowAccessApproval: RowAccessApproval = async ({ profile, level, connection }) => {
   const write = level === 'readwrite';
   const options: MessageBoxOptions = {
     type: 'warning',
@@ -83,13 +85,15 @@ const rowAccessApproval: RowAccessApproval = async ({ profile, level }) => {
     message: write
       ? `Allow row editing for the profile "${profile}"?`
       : `Allow row browsing for the profile "${profile}"?`,
-    detail: write
-      ? 'Row editing runs INSERT, UPDATE and DELETE statements against this database using the credentials stored for this profile. ' +
-        'Deleted or overwritten rows cannot be restored by this app, and the database enforces the final say on what your role may change. ' +
-        'Introspection and the local MCP surface stay read-only.'
-      : 'Row browsing reads table and view data from this database using the credentials stored for this profile. ' +
-        'Row data is only displayed — it is never uploaded and never written to disk. ' +
-        'Introspection and the local MCP surface stay read-only.',
+    detail:
+      `Database: ${connection}\n\n` +
+      (write
+        ? 'Row editing runs INSERT, UPDATE and DELETE statements against this database using the credentials stored for this profile. ' +
+          'Deleted or overwritten rows cannot be restored by this app, and the database enforces the final say on what your role may change. ' +
+          'Introspection and the local MCP surface stay read-only.'
+        : 'Row browsing reads table and view data from this database using the credentials stored for this profile. ' +
+          'Row data is only displayed — it is never uploaded and never written to disk. ' +
+          'Introspection and the local MCP surface stay read-only.'),
   };
   const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
   const { response } =
