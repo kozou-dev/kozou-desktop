@@ -6,9 +6,10 @@
 // tools to AI clients on the same machine; outbound traffic is still only
 // the user's own databases.
 
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { BrowserWindow, app, dialog, ipcMain, safeStorage, session, type MessageBoxOptions } from 'electron';
-import { IPC, type McpStatusEntry } from '../shared/types.js';
+import { IPC, type McpStatusEntry, type SaveSqlOutcome } from '../shared/types.js';
 import { DataWorkerManager } from './dataWorkerManager.js';
 import {
   validateListParams,
@@ -22,6 +23,7 @@ import { runInspectWorker } from './inspectRunner.js';
 import { McpServerManager } from './mcpServerManager.js';
 import { ProfileStore, validateProfileInput, type Encryptor } from './profileStore.js';
 import { assertRowAccess, requestRowAccessChange, type RowAccessApproval } from './rowAccessGate.js';
+import { suggestedFileName, validateSqlExport } from './sqlExport.js';
 
 // Pin the machine-facing identity to a stable slug. userData, the keychain
 // service name (safeStorage), and the single-instance lock scope all derive
@@ -297,6 +299,27 @@ void app.whenReady().then(() => {
       resource: validateResourceName(resource),
       id: validateRowId(id),
     });
+  });
+
+  // Save drafted DDL to a file. No profile, no gate, no database: the payload
+  // is text the renderer generated from a schema it was already shown, and the
+  // destination is whatever the user picks in the native dialog. The gate that
+  // matters here is that dialog — without a chosen path nothing is written.
+  ipcMain.handle(IPC.emitSaveSql, async (_e, name: unknown, sql: unknown): Promise<SaveSqlOutcome> => {
+    const text = validateSqlExport(sql);
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const options = {
+      title: 'Save COMMENT statements',
+      defaultPath: suggestedFileName(name),
+      filters: [{ name: 'SQL', extensions: ['sql'] }],
+    };
+    const { canceled, filePath } =
+      win !== undefined && !win.isDestroyed()
+        ? await dialog.showSaveDialog(win, options)
+        : await dialog.showSaveDialog(options);
+    if (canceled || filePath === undefined || filePath === '') return { saved: false };
+    await writeFile(filePath, text, 'utf8');
+    return { saved: true };
   });
 
   ipcMain.handle(IPC.mcpStatus, () => mcpManager.status());

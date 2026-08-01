@@ -7,6 +7,7 @@ export default defineConfig({
       'test/contract.test.ts',
       'test/mcpServer.integration.test.ts',
       'test/data.integration.test.ts',
+      'test/comment.integration.test.ts',
     ],
     // Introspection against a real database + a CLI subprocess run.
     testTimeout: 120_000,

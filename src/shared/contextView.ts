@@ -20,6 +20,12 @@ export type ColumnView = {
   label: string;
   description?: string | null;
   aiDescription?: string | null;
+  /** The COLUMN's COMMENT exactly as it stands in the database, lifted out of
+   *  the raw catalog record (see trim.ts). `description` is a processed form —
+   *  `@widget:`/`@example:` are lifted out of it — so it is this field, never
+   *  that one, that a comment editor is seeded from. Absent when the payload
+   *  carried no raw record to read it from; `null` means "no comment". */
+  rawComment?: string | null;
   enumValues?: string[] | null;
   /** Present when the column has a DEFAULT. A row editor reads it as "leave
    *  this out and the database fills it in", which is the difference between
@@ -58,6 +64,8 @@ export type TableView = {
   primaryKey: string[];
   columns: ColumnView[];
   relations: RelationRef[];
+  /** The TABLE's verbatim COMMENT — see `ColumnView.rawComment`. */
+  rawComment?: string | null;
 };
 
 export type ViewView = {
@@ -71,6 +79,13 @@ export type ViewView = {
   purpose: string | null;
   columns: ColumnView[];
   underlyingTables: { schema: string; name: string }[];
+  /** The VIEW's verbatim COMMENT — see `ColumnView.rawComment`. */
+  rawComment?: string | null;
+  /** Whether this is a MATERIALIZED view. Tri-state on purpose: `undefined`
+   *  means the relkind could not be established, which is not the same as
+   *  "ordinary view" — the two need different `COMMENT ON` keywords, so a
+   *  guess here becomes DDL the database rejects. */
+  materialized?: boolean;
 };
 
 export type ConceptView = {

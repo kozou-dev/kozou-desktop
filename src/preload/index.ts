@@ -34,6 +34,8 @@ const api: KozouDesktopApi = {
     ipcRenderer.invoke(IPC.dataUpdate, name, resource, id, values),
   dataDelete: (name: string, resource: string, id: string) =>
     ipcRenderer.invoke(IPC.dataDelete, name, resource, id),
+  saveSqlFile: (suggestedName: string, sql: string) =>
+    ipcRenderer.invoke(IPC.emitSaveSql, suggestedName, sql),
   onMcpStatusChanged: (listener: (entries: McpStatusEntry[]) => void) => {
     const wrapped = (_e: IpcRendererEvent, entries: McpStatusEntry[]): void => listener(entries);
     ipcRenderer.on(IPC.mcpStatusChanged, wrapped);

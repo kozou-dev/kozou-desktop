@@ -8,12 +8,14 @@
     RowAccess,
   } from '../../shared/types';
   import DetailPane from './DetailPane.svelte';
+  import DraftPanel from './DraftPanel.svelte';
   import EnumsPanel from './EnumsPanel.svelte';
   import FunctionsPanel from './FunctionsPanel.svelte';
   import OverviewCards from './OverviewCards.svelte';
   import SearchBar from './SearchBar.svelte';
   import SemanticMap from './SemanticMap.svelte';
   import { buildMcpClientSnippets } from '../../shared/mcpSnippet';
+  import type { CommentDraft } from './lib/commentEmit';
 
   const api = window.kozouDesktop;
 
@@ -35,6 +37,15 @@
   const bumpToken = (name: string): void => {
     profileTokens.set(name, (profileTokens.get(name) ?? 0) + 1);
     profileEpoch += 1;
+  };
+  /** Drop a profile's drafted statements. They name relations in a specific
+   *  database, so a profile that was repointed, re-saved or deleted stops
+   *  offering them rather than letting them follow the name somewhere they may
+   *  not apply. Deliberately NOT part of bumpToken: the token is bumped BEFORE
+   *  the store is asked, so that an in-flight inspect cannot land, and a refused
+   *  delete would then have discarded work while changing nothing. */
+  const dropDrafts = (name: string): void => {
+    drafts = drafts.filter((d) => d.profile !== name);
   };
 
   // Add-profile form
@@ -191,6 +202,70 @@
     void navigator.clipboard.writeText(text).catch(() => {});
   }
 
+  // -- Drafted COMMENT statements ------------------------------------------
+  // Generated, never applied. Held for the session and per profile: a draft is
+  // an unapplied schema change written against one specific database, so it is
+  // dropped the moment that profile stops being the same thing (see bumpToken).
+  let drafts = $state<CommentDraft[]>([]);
+  let draftStatus = $state<string | null>(null);
+  /** Which profile, and which exact draft set, the status was produced for. */
+  let draftStatusKey = $state<string | null>(null);
+  let nextDraftId = 0;
+
+  const currentDrafts = $derived(drafts.filter((d) => d.profile === selectedProfile));
+  /** The status describes a specific set of statements at a specific moment, so
+   *  it is shown only while that is still what the panel holds. Switching
+   *  profiles, or adding/removing a draft, makes "Copied"/"Saved" a claim about
+   *  something the operator is no longer looking at. */
+  const draftStatusFor = $derived(
+    draftStatusKey === `${selectedProfile}|${currentDrafts.map((d) => d.id).join(',')}`
+      ? draftStatus
+      : null,
+  );
+  function setDraftStatus(text: string | null): void {
+    draftStatus = text;
+    draftStatusKey =
+      text === null ? null : `${selectedProfile}|${currentDrafts.map((d) => d.id).join(',')}`;
+  }
+
+  function addDraft(target: string, sql: string): void {
+    if (selectedProfile === null) return;
+    setDraftStatus(null);
+    drafts = [...drafts, { id: (nextDraftId += 1), profile: selectedProfile, target, sql }];
+  }
+
+  function removeDraft(id: number): void {
+    drafts = drafts.filter((d) => d.id !== id);
+  }
+
+  function clearCurrentDrafts(): void {
+    setDraftStatus(null);
+    drafts = drafts.filter((d) => d.profile !== selectedProfile);
+  }
+
+  async function copyDrafts(text: string): Promise<void> {
+    // Reported from the outcome, not from having asked. The clipboard API can
+    // refuse (a window that is not focused, a platform that declines), and a
+    // panel that says "Copied" when nothing was copied sends the operator to
+    // paste something that is not there.
+    try {
+      await navigator.clipboard.writeText(text);
+      setDraftStatus('Copied to the clipboard.');
+    } catch {
+      setDraftStatus('The clipboard refused - the statements are above, select and copy them.');
+    }
+  }
+
+  async function saveDrafts(text: string): Promise<void> {
+    const suggested = selectedProfile === null ? 'comments.sql' : `${selectedProfile}-comments.sql`;
+    try {
+      const { saved } = await api.saveSqlFile(suggested, text);
+      setDraftStatus(saved ? 'Saved. Apply it yourself - this app runs nothing.' : null);
+    } catch (err) {
+      setDraftStatus(`Not saved: ${message(err)}`);
+    }
+  }
+
   const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
   const currentProfile = $derived(profiles.find((p) => p.name === selectedProfile) ?? null);
@@ -255,6 +330,7 @@
       // duplicate warning refers to the previous database.
       if (duplicatePending?.profile === name) duplicatePending = null;
       bumpToken(name);
+      dropDrafts(name);
       delete results[name];
       applyMcpStatus(await api.mcpStatus());
       await inspect(name);
@@ -271,6 +347,7 @@
       formError = message(err);
       return;
     }
+    dropDrafts(name);
     delete results[name];
     if (duplicatePending?.profile === name) duplicatePending = null;
     if (snippetFor === name) snippetFor = null;
@@ -462,11 +539,22 @@
               profile={selectedProfile}
               rowAccess={currentProfile?.rowAccess ?? 'off'}
               epoch={profileEpoch}
+              ondraft={addDraft}
             />
           {:else}
             <aside class="placeholder">Click a relation on the map to see its compiled semantics - and what a default-configured kozou server hands your AI for it.</aside>
           {/if}
         </div>
+        {#if currentDrafts.length > 0}
+          <DraftPanel
+            drafts={currentDrafts}
+            status={draftStatusFor}
+            onremove={removeDraft}
+            onclear={clearCurrentDrafts}
+            oncopy={copyDrafts}
+            onsave={saveDrafts}
+          />
+        {/if}
         <FunctionsPanel functions={currentContext.functions ?? []} aiText={current.aiViews.functions} />
         <EnumsPanel enums={currentContext.enums} />
       {:else}

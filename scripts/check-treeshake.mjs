@@ -35,9 +35,14 @@
 //     one — `externalizeDepsPlugin` ships node_modules whole, so the packaged
 //     app contains that code whether or not anything can reach it, and
 //     what the scans below prove is REACHABILITY, not absence from the artifact.
+//  5. COMMENT EMIT. The DDL generator must stay a pure renderer module: its
+//     whole import graph inside src/ (no dependency, no Node builtin — so no
+//     driver and no @kozou/api), absent from every process-side bundle, and
+//     present in the built renderer. The third leg is what keeps the first two
+//     from passing vacuously on a module nothing ships.
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -45,9 +50,11 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const outDir = mkdtempSync(join(tmpdir(), 'kozou-desktop-treeshake-'));
 
 /** Bundle one entry with esbuild (not minified: identifiers survive, which is
- *  what the marker scans read) and return the bundle text. */
-function bundle(entry, name) {
+ *  what the marker scans read). Returns the bundle text and its import graph —
+ *  every file esbuild pulled in, as repo-relative paths. */
+function bundle(entry, name, { platform = 'node', externals = ['electron', 'pg-native'] } = {}) {
   const outFile = join(outDir, `${name}.bundle.js`);
+  const metaFile = join(outDir, `${name}.meta.json`);
   execFileSync(
     'pnpm',
     [
@@ -55,15 +62,18 @@ function bundle(entry, name) {
       'esbuild',
       entry,
       '--bundle',
-      '--platform=node',
+      `--platform=${platform}`,
       '--format=esm',
-      '--external:electron',
-      '--external:pg-native',
+      ...externals.map((mod) => `--external:${mod}`),
       `--outfile=${outFile}`,
+      `--metafile=${metaFile}`,
     ],
     { cwd: ROOT, stdio: ['ignore', 'ignore', 'inherit'] },
   );
-  return readFileSync(outFile, 'utf8');
+  return {
+    text: readFileSync(outFile, 'utf8'),
+    inputs: Object.keys(JSON.parse(readFileSync(metaFile, 'utf8')).inputs),
+  };
 }
 
 // The write path's entry points. `handleApiRequest` is the dispatcher the data
@@ -125,8 +135,11 @@ const SURFACES = [
 ];
 
 let failed = false;
+/** repo-relative input path -> the bundles that pulled it in. */
+const processSideGraphs = new Map();
 for (const surface of SURFACES) {
-  const text = bundle(surface.entry, surface.name);
+  const { text, inputs } = bundle(surface.entry, surface.name);
+  processSideGraphs.set(surface.label, inputs);
   const found = surface.markers.filter((m) => text.includes(m));
   if (found.length > 0) {
     console.error(`BUNDLE VIOLATION: markers present in ${surface.label} bundle: ${found.join(', ')}`);
@@ -141,7 +154,9 @@ for (const surface of SURFACES) {
 // Sanity check on the scans themselves: the markers must actually be findable
 // in the one bundle that is allowed to contain them. Without this, a renamed
 // upstream export would turn every scan above into a vacuous pass.
-const dataBundle = bundle('src/worker/dataWorker.ts', 'dataWorker');
+const data = bundle('src/worker/dataWorker.ts', 'dataWorker');
+const dataBundle = data.text;
+processSideGraphs.set('data worker', data.inputs);
 const missing = WRITE_MARKERS.filter((m) => !dataBundle.includes(m));
 if (missing.length > 0) {
   console.error(
@@ -249,14 +264,142 @@ if (serverViolations.length > 0) {
   console.log(`src sources: no ${SERVER_ENTRY_POINTS.join('/')} usage`);
 }
 
-/** Every .ts / .svelte source under `dir`, recursively, as repo-relative paths. */
-function readSources(dir) {
+// -- 7. the COMMENT emit module is a pure renderer module ---------------------
+// The feature's whole promise is that it GENERATES DDL and never runs it. That
+// is a claim about what the generator can reach, so it is checked as one:
+//
+//   (a) its own import graph contains nothing but src/ — no dependency (so
+//       neither `pg` nor @kozou/api) and no Node builtin, bundled for the
+//       browser so a Node import fails the check rather than resolving;
+//   (b) it is in no process-side bundle — main and the three workers are the
+//       processes that hold a connection, and the generator has no business
+//       being reachable from any of them;
+//   (c) it IS in the built renderer. Without this leg (a) and (b) would keep
+//       passing for a module that had quietly stopped shipping.
+const EMIT_MODULE = 'src/renderer/src/lib/commentEmit.ts';
+// Two ways the first leg can fail, and both have to be reported as the rule
+// rather than as whatever went wrong underneath. A Node builtin (directly, or
+// through a dependency that reaches one) makes the BROWSER bundle fail to
+// resolve, so esbuild exits non-zero before there is a graph to inspect;
+// anything else that resolves shows up as an input outside src/. Measured: an
+// UNUSED import of either kind is elided before resolution and trips neither —
+// correctly, since an unused import cannot make this module reach anything.
+//
+// NOTHING is externalized for this bundle, unlike the surface scans above.
+// Measured: with `--external:electron`, a used `import { ipcRenderer } from
+// 'electron'` survives in the output as an external import and never appears in
+// the metafile inputs — so the graph check reported "no dependency" for a module
+// importing Electron. With no externals, that import fails to resolve and the
+// catch below reports it.
+let emit = null;
+try {
+  emit = bundle(EMIT_MODULE, 'commentEmit', { platform: 'browser', externals: [] });
+} catch {
+  console.error(
+    `EMIT VIOLATION: ${EMIT_MODULE} no longer bundles for the browser — it reaches a Node ` +
+      'builtin, or a dependency that does. The DDL generator must stay a pure renderer module.',
+  );
+  failed = true;
+}
+if (emit !== null) {
+  const emitForeignInputs = emit.inputs.filter((input) => !input.startsWith('src/'));
+  if (emitForeignInputs.length > 0) {
+    console.error(
+      `EMIT VIOLATION: ${EMIT_MODULE} reaches outside src/: ${emitForeignInputs.join(', ')}`,
+    );
+    failed = true;
+  } else {
+    console.log(`comment emit: import graph is ${emit.inputs.length} src file(s), no dependency`);
+  }
+}
+
+const emitOnProcessSide = [...processSideGraphs]
+  .filter(([, inputs]) => inputs.includes(EMIT_MODULE))
+  .map(([label]) => label);
+if (emitOnProcessSide.length > 0) {
+  console.error(
+    `EMIT VIOLATION: ${EMIT_MODULE} is reachable from ${emitOnProcessSide.join(', ')} — ` +
+      'the DDL generator belongs to the renderer, which holds no connection',
+  );
+  failed = true;
+} else {
+  console.log(`comment emit: absent from all ${processSideGraphs.size} process-side bundles`);
+}
+
+// The generator must also not reach the database THROUGH the preload bridge. No
+// import-graph check can see that — a call on the injected `window.kozouDesktop`
+// object adds no import at all — so it is a source rule instead, and the honest
+// scope of the whole leg is stated in EGRESS.md rather than overclaimed.
+const EMIT_BRIDGE_PATTERNS = [
+  { re: /\bkozouDesktop\b/, label: 'the preload bridge' },
+  { re: /\bwindow\b/, label: 'the renderer global' },
+];
+const emitSource = readFileSync(join(ROOT, EMIT_MODULE), 'utf8');
+const bridgeUse = EMIT_BRIDGE_PATTERNS.filter(({ re }) => re.test(emitSource));
+if (bridgeUse.length > 0) {
+  console.error(
+    `EMIT VIOLATION: ${EMIT_MODULE} names ${bridgeUse.map((b) => b.label).join(', ')} — the ` +
+      'generator takes a relation and a string and returns a string; anything it can call is a ' +
+      'way for it to reach what it must not',
+  );
+  failed = true;
+} else {
+  console.log('comment emit: no preload bridge, no renderer global');
+}
+
+// Provenance, at source level: something the renderer builds from has to import
+// the module. The artifact scan below cannot establish this — it looks for
+// strings, and a string can come from anywhere — so the two are checked
+// separately and only both together mean "this module ships".
+const emitImporters = readSources(join(ROOT, 'src/renderer')).filter(
+  ({ file, text }) => !file.endsWith('lib/commentEmit.ts') && /['"][^'"]*commentEmit['"]/.test(text),
+);
+if (emitImporters.length === 0) {
+  console.error(
+    `EMIT VIOLATION: nothing under src/renderer/ imports ${EMIT_MODULE} — the generator is not ` +
+      'wired into the UI, so the checks about where it may appear are about dead code',
+  );
+  failed = true;
+} else {
+  console.log(`comment emit: imported by ${emitImporters.length} renderer source(s)`);
+}
+
+// Marker strings, not identifiers: the renderer build minifies, which renames
+// every function in this module but leaves its string literals alone. On its own
+// this proves only that two strings ship — which is why it is paired with the
+// source-level provenance check above.
+const EMIT_ARTIFACT_MARKERS = ['COMMENT ON ', 'MATERIALIZED VIEW'];
+const rendererDir = join(ROOT, 'out/renderer');
+if (existsSync(rendererDir)) {
+  const rendererJs = readSources(rendererDir, ['.js'])
+    .map(({ text }) => text)
+    .join('\n');
+  const absent = EMIT_ARTIFACT_MARKERS.filter((m) => !rendererJs.includes(m));
+  if (absent.length > 0) {
+    console.error(
+      `EMIT VIOLATION: the built renderer does not contain ${absent.join(', ')} — either the ` +
+        'generator no longer ships or the statements changed shape. Both make the two checks ' +
+        'above claims about a module the app does not use; update the markers or the import.',
+    );
+    failed = true;
+  } else {
+    console.log('comment emit: present in the built renderer (checks above are live)');
+  }
+} else if (process.env.CI) {
+  console.error('EMIT VIOLATION: out/renderer missing in CI — run the build before check:treeshake');
+  failed = true;
+} else {
+  console.warn('note: out/renderer not found — run `pnpm build` first for the emit reachability check');
+}
+
+/** Every source under `dir`, recursively, as repo-relative paths. */
+function readSources(dir, extensions = ['.ts', '.svelte']) {
   const out = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
-      out.push(...readSources(full));
-    } else if (entry.name.endsWith('.ts') || entry.name.endsWith('.svelte')) {
+      out.push(...readSources(full, extensions));
+    } else if (extensions.some((ext) => entry.name.endsWith(ext))) {
       out.push({ file: full.slice(ROOT.length), text: readFileSync(full, 'utf8') });
     }
   }
