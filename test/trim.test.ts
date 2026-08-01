@@ -104,13 +104,13 @@ describe('trimContext', () => {
     const ctx = {
       tables: [],
       views: [
-        { name: 'plain', qualifiedName: 'public.plain', rawView: { comment: null } },
-        { name: 'snap', qualifiedName: 'public.snap', rawView: { comment: null } },
+        { schema: 'public', name: 'plain', qualifiedName: 'public.plain', rawView: { comment: null } },
+        { schema: 'public', name: 'snap', qualifiedName: 'public.snap', rawView: { comment: null } },
       ],
     };
 
     it('marks each view when the relkind was established', () => {
-      const out = trimContext(ctx, { materializedViews: ['public.snap'] });
+      const out = trimContext(ctx, { materializedViews: [{ schema: 'public', name: 'snap' }] });
       const views = out.views as Record<string, unknown>[];
       expect(views[0]!.materialized).toBe(false);
       expect(views[1]!.materialized).toBe(true);
@@ -119,6 +119,36 @@ describe('trimContext', () => {
     it('marks every view false when the query found none', () => {
       const views = trimContext(ctx, { materializedViews: [] }).views as Record<string, unknown>[];
       expect(views.map((v) => v.materialized)).toEqual([false, false]);
+    });
+
+    it('does not confuse two relations that share a qualified name', () => {
+      // A dot is legal inside a quoted identifier, so `schema.name` is not an
+      // identity. Measured against a real database: matching on it marked the
+      // ordinary view `"sales"."archive.rollup"` materialized, because the
+      // MATERIALIZED view `"sales.archive"."rollup"` joins to the same string —
+      // and the app then emitted DDL PostgreSQL rejects.
+      const ambiguous = {
+        tables: [],
+        views: [
+          {
+            schema: 'sales',
+            name: 'archive.rollup',
+            qualifiedName: 'sales.archive.rollup',
+            rawView: { comment: null },
+          },
+          {
+            schema: 'sales.archive',
+            name: 'rollup',
+            qualifiedName: 'sales.archive.rollup',
+            rawView: { comment: null },
+          },
+        ],
+      };
+      const views = trimContext(ambiguous, {
+        materializedViews: [{ schema: 'sales.archive', name: 'rollup' }],
+      }).views as Record<string, unknown>[];
+      expect(views[0]!.materialized).toBe(false);
+      expect(views[1]!.materialized).toBe(true);
     });
 
     it('leaves every view unmarked when the relkind is unknown', () => {

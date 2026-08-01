@@ -48,6 +48,17 @@ async function storedComment(qualified: string): Promise<string | null> {
   return rows[0]?.c ?? null;
 }
 
+/** The comment PostgreSQL currently holds for one column of a relation. */
+async function storedColumnComment(qualified: string, column: string): Promise<string | null> {
+  const { rows } = await reader.query<{ c: string | null }>(
+    `SELECT col_description(a.attrelid, a.attnum) AS c
+       FROM pg_attribute a
+      WHERE a.attrelid = $1::regclass AND a.attname = $2`,
+    [qualified, column],
+  );
+  return rows[0]?.c ?? null;
+}
+
 /** Launch the built app on a fresh user-data directory with one profile
  *  inspected. No row-access grant is given anywhere in this suite: the comment
  *  editor must not need one. */
@@ -120,6 +131,7 @@ test('comment editor: seeded verbatim, emits per relation kind, applies nothing'
     expect(await storedComment('public.customer_totals')).toBe(before);
 
     // --- an ordinary view gets the other keyword -----------------------------
+    const viewBefore = await storedComment('public.recent_orders');
     await page.getByTestId('map-node-public.recent_orders').click();
     await expect(page.getByTestId('detail-pane')).toContainText('public.recent_orders');
     await page.getByTestId('edit-relation-comment').click();
@@ -130,6 +142,7 @@ test('comment editor: seeded verbatim, emits per relation kind, applies nothing'
     await page.getByTestId('comment-draft').click();
 
     // --- a column, addressed through its relation ----------------------------
+    const emailBefore = await storedColumnComment('public.customers', 'email');
     await page.getByTestId('map-node-public.customers').click();
     await page.getByTestId('edit-column-comment-email').click();
     const columnText = page.getByTestId('comment-text');
@@ -142,7 +155,13 @@ test('comment editor: seeded verbatim, emits per relation kind, applies nothing'
     await page.getByTestId('comment-draft').click();
 
     await expect(panel.locator('li')).toHaveCount(3);
-    expect(await storedComment('public.customers')).not.toBeNull();
+
+    // --- nothing was applied, checked per drafted target ---------------------
+    // One re-read is not enough: an implementation that wrongly applied two of
+    // the three would still satisfy a check that only looks at the third.
+    expect(await storedComment('public.customer_totals')).toBe(before);
+    expect(await storedComment('public.recent_orders')).toBe(viewBefore);
+    expect(await storedColumnComment('public.customers', 'email')).toBe(emailBefore);
   } finally {
     await app.close();
   }

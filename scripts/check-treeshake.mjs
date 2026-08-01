@@ -52,7 +52,7 @@ const outDir = mkdtempSync(join(tmpdir(), 'kozou-desktop-treeshake-'));
 /** Bundle one entry with esbuild (not minified: identifiers survive, which is
  *  what the marker scans read). Returns the bundle text and its import graph —
  *  every file esbuild pulled in, as repo-relative paths. */
-function bundle(entry, name, { platform = 'node' } = {}) {
+function bundle(entry, name, { platform = 'node', externals = ['electron', 'pg-native'] } = {}) {
   const outFile = join(outDir, `${name}.bundle.js`);
   const metaFile = join(outDir, `${name}.meta.json`);
   execFileSync(
@@ -64,8 +64,7 @@ function bundle(entry, name, { platform = 'node' } = {}) {
       '--bundle',
       `--platform=${platform}`,
       '--format=esm',
-      '--external:electron',
-      '--external:pg-native',
+      ...externals.map((mod) => `--external:${mod}`),
       `--outfile=${outFile}`,
       `--metafile=${metaFile}`,
     ],
@@ -285,9 +284,16 @@ const EMIT_MODULE = 'src/renderer/src/lib/commentEmit.ts';
 // anything else that resolves shows up as an input outside src/. Measured: an
 // UNUSED import of either kind is elided before resolution and trips neither —
 // correctly, since an unused import cannot make this module reach anything.
+//
+// NOTHING is externalized for this bundle, unlike the surface scans above.
+// Measured: with `--external:electron`, a used `import { ipcRenderer } from
+// 'electron'` survives in the output as an external import and never appears in
+// the metafile inputs — so the graph check reported "no dependency" for a module
+// importing Electron. With no externals, that import fails to resolve and the
+// catch below reports it.
 let emit = null;
 try {
-  emit = bundle(EMIT_MODULE, 'commentEmit', { platform: 'browser' });
+  emit = bundle(EMIT_MODULE, 'commentEmit', { platform: 'browser', externals: [] });
 } catch {
   console.error(
     `EMIT VIOLATION: ${EMIT_MODULE} no longer bundles for the browser — it reaches a Node ` +
@@ -320,8 +326,48 @@ if (emitOnProcessSide.length > 0) {
   console.log(`comment emit: absent from all ${processSideGraphs.size} process-side bundles`);
 }
 
+// The generator must also not reach the database THROUGH the preload bridge. No
+// import-graph check can see that — a call on the injected `window.kozouDesktop`
+// object adds no import at all — so it is a source rule instead, and the honest
+// scope of the whole leg is stated in EGRESS.md rather than overclaimed.
+const EMIT_BRIDGE_PATTERNS = [
+  { re: /\bkozouDesktop\b/, label: 'the preload bridge' },
+  { re: /\bwindow\b/, label: 'the renderer global' },
+];
+const emitSource = readFileSync(join(ROOT, EMIT_MODULE), 'utf8');
+const bridgeUse = EMIT_BRIDGE_PATTERNS.filter(({ re }) => re.test(emitSource));
+if (bridgeUse.length > 0) {
+  console.error(
+    `EMIT VIOLATION: ${EMIT_MODULE} names ${bridgeUse.map((b) => b.label).join(', ')} — the ` +
+      'generator takes a relation and a string and returns a string; anything it can call is a ' +
+      'way for it to reach what it must not',
+  );
+  failed = true;
+} else {
+  console.log('comment emit: no preload bridge, no renderer global');
+}
+
+// Provenance, at source level: something the renderer builds from has to import
+// the module. The artifact scan below cannot establish this — it looks for
+// strings, and a string can come from anywhere — so the two are checked
+// separately and only both together mean "this module ships".
+const emitImporters = readSources(join(ROOT, 'src/renderer')).filter(
+  ({ file, text }) => !file.endsWith('lib/commentEmit.ts') && /['"][^'"]*commentEmit['"]/.test(text),
+);
+if (emitImporters.length === 0) {
+  console.error(
+    `EMIT VIOLATION: nothing under src/renderer/ imports ${EMIT_MODULE} — the generator is not ` +
+      'wired into the UI, so the checks about where it may appear are about dead code',
+  );
+  failed = true;
+} else {
+  console.log(`comment emit: imported by ${emitImporters.length} renderer source(s)`);
+}
+
 // Marker strings, not identifiers: the renderer build minifies, which renames
-// every function in this module but leaves its string literals alone.
+// every function in this module but leaves its string literals alone. On its own
+// this proves only that two strings ship — which is why it is paired with the
+// source-level provenance check above.
 const EMIT_ARTIFACT_MARKERS = ['COMMENT ON ', 'MATERIALIZED VIEW'];
 const rendererDir = join(ROOT, 'out/renderer');
 if (existsSync(rendererDir)) {

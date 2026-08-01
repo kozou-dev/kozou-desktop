@@ -17,6 +17,7 @@
 // worse than an absent one.
 
 import { Client } from 'pg';
+import type { RelationRef2 } from '../shared/trim.js';
 
 export type RelkindOptions = {
   /** Full connection URL (with password). Callers keep it out of argv/logs. */
@@ -32,12 +33,17 @@ const DEFAULT_TIMEOUT_MS = 10_000;
  *  statement runs, so a stalled TCP connect needs its own bound. */
 const CONNECT_TIMEOUT_MS = 10_000;
 
-/** Qualified names (`schema.view`) of the MATERIALIZED views in `schemas`, or
- *  `undefined` when the question could not be answered. The two are different
- *  claims and the caller must keep them apart: an empty array means "none are
- *  materialized", `undefined` means "the relkind of every view here is
- *  unknown". */
-export async function fetchMaterializedViews(opts: RelkindOptions): Promise<string[] | undefined> {
+/** The MATERIALIZED views in `schemas`, or `undefined` when the question could
+ *  not be answered. The two are different claims and the caller must keep them
+ *  apart: an empty array means "none are materialized", `undefined` means "the
+ *  relkind of every view here is unknown".
+ *
+ *  Reported as (schema, name) pairs, never as a joined `schema.name` — a dot is
+ *  legal inside a quoted identifier, and joining makes two different relations
+ *  indistinguishable (see RelationRef2). */
+export async function fetchMaterializedViews(
+  opts: RelkindOptions,
+): Promise<RelationRef2[] | undefined> {
   const timeout =
     typeof opts.timeoutMs === 'number' && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
       ? Math.floor(opts.timeoutMs)
@@ -52,15 +58,27 @@ export async function fetchMaterializedViews(opts: RelkindOptions): Promise<stri
 
   try {
     await client.connect();
-    const { rows } = await client.query<{ schema: string; name: string }>(
-      `SELECT n.nspname AS schema, c.relname AS name
-         FROM pg_class c
-         JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE c.relkind = 'm'
-          AND n.nspname = ANY($1::text[])`,
-      [opts.schemas],
-    );
-    return rows.map((r) => `${r.schema}.${r.name}`);
+    // Inside `BEGIN READ ONLY`, like every other read this app makes. The
+    // statement is a fixed SELECT, so the transaction adds nothing today — but
+    // "introspection always runs read-only" is a guarantee the docs state
+    // unconditionally, and a read that sits outside it makes that untrue for
+    // part of every inspection.
+    await client.query('BEGIN READ ONLY');
+    try {
+      const { rows } = await client.query<{ schema: string; name: string }>(
+        `SELECT n.nspname AS schema, c.relname AS name
+           FROM pg_class c
+           JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE c.relkind = 'm'
+            AND n.nspname = ANY($1::text[])`,
+        [opts.schemas],
+      );
+      await client.query('COMMIT');
+      return rows.map((r) => ({ schema: r.schema, name: r.name }));
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    }
   } catch {
     // Deliberately silent and deliberately not fatal: the error text can quote
     // connection details, the inspect itself is unaffected, and the caller

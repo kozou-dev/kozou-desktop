@@ -78,12 +78,34 @@ function liftEntry(entry: AnyRecord, rawKey: 'rawTable' | 'rawView'): AnyRecord 
   return out;
 }
 
+/** One relation named the way the catalog names it: as two parts.
+ *
+ *  Deliberately NOT the `schema.name` string the context uses as an id. That
+ *  form is ambiguous — a dot is legal inside a quoted identifier, so the
+ *  ordinary view `"sales"."archive.rollup"` and the materialized view
+ *  `"sales.archive"."rollup"` share one qualified name (measured). Matching on
+ *  it marked the ordinary view materialized and emitted DDL PostgreSQL rejects. */
+export type RelationRef2 = { schema: string; name: string };
+
 export type TrimOptions = {
-  /** Qualified names (`schema.view`) of the views that are MATERIALIZED, as
-   *  established by the worker's own catalog query. Omit it to say the relkind
-   *  is unknown: every view is then left unmarked rather than marked ordinary. */
-  materializedViews?: readonly string[];
+  /** The views that are MATERIALIZED, as established by the worker's own
+   *  catalog query. Omit it to say the relkind is unknown: every view is then
+   *  left unmarked rather than marked ordinary. */
+  materializedViews?: readonly RelationRef2[];
 };
+
+/** Membership test over (schema, name) pairs. A Set of joined strings would
+ *  reintroduce the ambiguity this type exists to avoid, so the two parts are
+ *  kept apart the whole way. */
+function materializedLookup(refs: readonly RelationRef2[]): (schema: string, name: string) => boolean {
+  const bySchema = new Map<string, Set<string>>();
+  for (const ref of refs) {
+    const names = bySchema.get(ref.schema) ?? new Set<string>();
+    names.add(ref.name);
+    bySchema.set(ref.schema, names);
+  }
+  return (schema, name) => bySchema.get(schema)?.has(name) ?? false;
+}
 
 /** Structurally clone `context` as the renderer payload (see the file header).
  *  The input is treated as untyped JSON so this file has no dependency on
@@ -98,14 +120,18 @@ export function trimContext(context: AnyRecord, opts: TrimOptions = {}): AnyReco
     );
   }
 
-  const materialized =
-    opts.materializedViews === undefined ? undefined : new Set(opts.materializedViews);
+  const isMaterialized =
+    opts.materializedViews === undefined ? undefined : materializedLookup(opts.materializedViews);
   if (Array.isArray(context.views)) {
     out.views = context.views.map((entry) => {
       if (!isRecord(entry)) return entry;
       const view = liftEntry(entry, 'rawView');
-      if (materialized !== undefined && typeof view.qualifiedName === 'string') {
-        view.materialized = materialized.has(view.qualifiedName);
+      if (
+        isMaterialized !== undefined &&
+        typeof view.schema === 'string' &&
+        typeof view.name === 'string'
+      ) {
+        view.materialized = isMaterialized(view.schema, view.name);
       }
       return view;
     });
