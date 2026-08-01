@@ -278,15 +278,33 @@ if (serverViolations.length > 0) {
 //   (c) it IS in the built renderer. Without this leg (a) and (b) would keep
 //       passing for a module that had quietly stopped shipping.
 const EMIT_MODULE = 'src/renderer/src/lib/commentEmit.ts';
-const emit = bundle(EMIT_MODULE, 'commentEmit', { platform: 'browser' });
-const emitForeignInputs = emit.inputs.filter((input) => !input.startsWith('src/'));
-if (emitForeignInputs.length > 0) {
+// Two ways the first leg can fail, and both have to be reported as the rule
+// rather than as whatever went wrong underneath. A Node builtin (directly, or
+// through a dependency that reaches one) makes the BROWSER bundle fail to
+// resolve, so esbuild exits non-zero before there is a graph to inspect;
+// anything else that resolves shows up as an input outside src/. Measured: an
+// UNUSED import of either kind is elided before resolution and trips neither —
+// correctly, since an unused import cannot make this module reach anything.
+let emit = null;
+try {
+  emit = bundle(EMIT_MODULE, 'commentEmit', { platform: 'browser' });
+} catch {
   console.error(
-    `EMIT VIOLATION: ${EMIT_MODULE} reaches outside src/: ${emitForeignInputs.join(', ')}`,
+    `EMIT VIOLATION: ${EMIT_MODULE} no longer bundles for the browser — it reaches a Node ` +
+      'builtin, or a dependency that does. The DDL generator must stay a pure renderer module.',
   );
   failed = true;
-} else {
-  console.log(`comment emit: import graph is ${emit.inputs.length} src file(s), no dependency`);
+}
+if (emit !== null) {
+  const emitForeignInputs = emit.inputs.filter((input) => !input.startsWith('src/'));
+  if (emitForeignInputs.length > 0) {
+    console.error(
+      `EMIT VIOLATION: ${EMIT_MODULE} reaches outside src/: ${emitForeignInputs.join(', ')}`,
+    );
+    failed = true;
+  } else {
+    console.log(`comment emit: import graph is ${emit.inputs.length} src file(s), no dependency`);
+  }
 }
 
 const emitOnProcessSide = [...processSideGraphs]
@@ -313,8 +331,9 @@ if (existsSync(rendererDir)) {
   const absent = EMIT_ARTIFACT_MARKERS.filter((m) => !rendererJs.includes(m));
   if (absent.length > 0) {
     console.error(
-      `EMIT VIOLATION: the built renderer does not contain ${absent.join(', ')} — ` +
-        'the emit module no longer ships, so the two checks above prove nothing',
+      `EMIT VIOLATION: the built renderer does not contain ${absent.join(', ')} — either the ` +
+        'generator no longer ships or the statements changed shape. Both make the two checks ' +
+        'above claims about a module the app does not use; update the markers or the import.',
     );
     failed = true;
   } else {
