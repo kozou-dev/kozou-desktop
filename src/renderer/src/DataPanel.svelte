@@ -22,8 +22,20 @@
   //     rather than left to look like the value. The same limit applies to the
   //     cursors: sorting by a column whose values are too large to fit one ends
   //     the walk, and the pane says so instead of offering a dead button.
+  //
+  // Editing rides on the same pane, under a grant of its own (`canEdit`), and
+  // adds two rules to the four above:
+  //
+  //   * An editor never starts from the page. The row is re-fetched through the
+  //     single-row `get` path first, because a page value may have been cut
+  //     before it left the worker and saving a cut value back would write the
+  //     cut into the database.
+  //   * A row that cannot be addressed offers no editor. The id an item route
+  //     takes is derived from the primary key (see lib/rowForm.ts); where that
+  //     derivation fails, the row says why instead of offering controls that
+  //     would act on some other row.
 
-  import type { ColumnView } from '../../shared/contextView';
+  import type { ColumnView, RelationRef } from '../../shared/contextView';
   import {
     DATA_CELL_PREVIEW_CHARS,
     DATA_VALUE_BUDGET,
@@ -31,12 +43,16 @@
     type DataResult,
     type DataTruncation,
   } from '../../shared/types';
+  import RowForm from './RowForm.svelte';
+  import { rowId, ROW_ID_EXPLANATION, type FormMode } from './lib/rowForm';
 
   let {
     profile,
     resource,
     columns,
     primaryKey,
+    relations = [],
+    canEdit = false,
   }: {
     profile: string;
     /** Schema-qualified name — what the worker's resource lookup resolves. */
@@ -44,6 +60,13 @@
     columns: ColumnView[];
     /** Empty for a view or a table without one: no total order, no cursors. */
     primaryKey: string[];
+    /** The table's foreign keys, for display hints in the editor. */
+    relations?: RelationRef[];
+    /** Whether this relation may be written from here. False for a view, for a
+     *  table with no primary key, and for any profile not granted 'readwrite' —
+     *  the panel offers no write control at all in those cases, rather than
+     *  offering one that main's gate would refuse. */
+    canEdit?: boolean;
   } = $props();
 
   const api = window.kozouDesktop;
@@ -233,6 +256,137 @@
     first();
   }
 
+  // --- editing -------------------------------------------------------------
+  // Everything below is inert unless `canEdit` is true; the markup renders none
+  // of it otherwise, so a profile with browse-only access cannot reach a
+  // control whose call main would refuse anyway.
+
+  type Editing =
+    | { mode: 'insert' }
+    | { mode: 'update'; id: string; row: Record<string, unknown> };
+
+  let editing = $state<Editing | null>(null);
+  /** A write (or the `get` that opens an editor) is in flight. */
+  let editBusy = $state(false);
+  let editError = $state<string | null>(null);
+  /** What just happened, in one line. Cleared by the next action, so it can
+   *  never be read as a description of the rows currently on screen. */
+  let notice = $state<string | null>(null);
+  /** The row whose delete is waiting for a second click. Deleting is the one
+   *  action here with nothing to undo it, so it takes two. */
+  let confirming = $state<string | null>(null);
+
+  /** Only the newest editor request may land, for the same reason page loads
+   *  carry one: a slow `get` must not open an editor over a row the operator
+   *  has moved on from. */
+  let editSeq = 0;
+
+  const idFor = (row: Record<string, unknown>): ReturnType<typeof rowId> =>
+    rowId(primaryKey, row);
+
+  function resetEdit(): void {
+    editSeq += 1;
+    editing = null;
+    editBusy = false;
+    editError = null;
+    confirming = null;
+  }
+
+  function startInsert(): void {
+    resetEdit();
+    notice = null;
+    editing = { mode: 'insert' };
+  }
+
+  /** Open the editor for a row — from a fresh `get`, never from the page. The
+   *  page's values may have been cut before they left the worker, so seeding a
+   *  form from them would offer the cut back for saving. */
+  async function startUpdate(id: string): Promise<void> {
+    resetEdit();
+    notice = null;
+    const mine = ++editSeq;
+    editBusy = true;
+    let result: DataResult;
+    try {
+      result = await api.dataGet(profile, resource, id);
+    } catch (err) {
+      if (mine !== editSeq) return;
+      editBusy = false;
+      error = message(err);
+      return;
+    }
+    if (mine !== editSeq) return;
+    editBusy = false;
+    if (!result.ok) {
+      // No editor is opened: there is nothing to edit, and saying so where the
+      // rows are is more use than an empty form carrying the message.
+      error = result.message;
+      return;
+    }
+    if (typeof result.body !== 'object' || result.body === null || Array.isArray(result.body)) {
+      error = 'The database returned a row in a shape this build does not understand.';
+      return;
+    }
+    editing = { mode: 'update', id, row: result.body as Record<string, unknown> };
+  }
+
+  /** Run one write and, if it lands, close the form and re-read the page the
+   *  panel is showing. The reload is deliberate: a written row belongs wherever
+   *  the current sort puts it, which is not necessarily in view, and claiming
+   *  otherwise by patching the rows in place would be a claim about a page this
+   *  panel did not fetch. */
+  async function write(
+    call: () => Promise<DataResult>,
+    done: string,
+  ): Promise<void> {
+    const mine = ++editSeq;
+    editBusy = true;
+    editError = null;
+    let result: DataResult;
+    try {
+      result = await call();
+    } catch (err) {
+      if (mine !== editSeq) return;
+      editBusy = false;
+      editError = message(err);
+      return;
+    }
+    if (mine !== editSeq) return;
+    editBusy = false;
+    if (!result.ok) {
+      editError = result.message;
+      return;
+    }
+    editing = null;
+    confirming = null;
+    notice = done;
+    void load(pos);
+  }
+
+  function saveRow(values: Record<string, unknown>): void {
+    const target = editing;
+    if (target === null) return;
+    void write(
+      () =>
+        target.mode === 'insert'
+          ? api.dataInsert(profile, resource, values)
+          : api.dataUpdate(profile, resource, target.id, values),
+      target.mode === 'insert' ? 'Row inserted.' : 'Row updated.',
+    );
+  }
+
+  function confirmDelete(id: string): void {
+    notice = null;
+    editError = null;
+    confirming = id;
+  }
+
+  function deleteRow(id: string): void {
+    void write(() => api.dataDelete(profile, resource, id), 'Row deleted.');
+  }
+
+  const formMode = (e: Editing): FormMode => e.mode;
+
   /** A value as one line of text. Dates survive structured clone as Dates, and
    *  bytea arrives as a byte array — neither has a useful default rendering. */
   function formatCell(value: unknown): string {
@@ -320,6 +474,9 @@
     {#if !atStart}
       <button data-testid="data-first" onclick={first} disabled={loading}>&laquo; first page</button>
     {/if}
+    {#if canEdit}
+      <button data-testid="data-new" onclick={startInsert} disabled={editBusy}>+ new row</button>
+    {/if}
   </div>
 
   {#if !keyset}
@@ -352,6 +509,31 @@
   {#if error}
     <p class="err" data-testid="data-error">{error}</p>
   {/if}
+  {#if notice}
+    <p class="ok" data-testid="data-notice">{notice}</p>
+  {/if}
+  {#if editError && editing === null}
+    <!-- A write that failed with no form open: a delete. The form carries its
+         own failure while it is up. -->
+    <p class="err" data-testid="data-write-error">{editError}</p>
+  {/if}
+
+  {#if editing !== null}
+    <!-- Keyed on what is being edited, so switching rows builds a fresh form
+         rather than re-seeding one that may already hold typed input. -->
+    {#key editing.mode === 'update' ? `u:${editing.id}` : 'insert'}
+      <RowForm
+        {columns}
+        {relations}
+        mode={formMode(editing)}
+        row={editing.mode === 'update' ? editing.row : undefined}
+        busy={editBusy}
+        error={editError}
+        onsubmit={saveRow}
+        oncancel={resetEdit}
+      />
+    {/key}
+  {/if}
 
   {#if loading && !loaded}
     <p class="note" data-testid="data-loading">Loading rows...</p>
@@ -366,6 +548,7 @@
       <table class="grid" data-testid="data-grid">
         <thead>
           <tr>
+            {#if canEdit}<th class="acts"></th>{/if}
             {#each columns as c (c.name)}
               <th class:pk={c.isPrimaryKey} title={c.dataType}>{c.name}</th>
             {/each}
@@ -374,6 +557,45 @@
         <tbody>
           {#each rows as row, i (i)}
             <tr>
+              {#if canEdit}
+                {@const id = idFor(row)}
+                <td class="acts">
+                  {#if !id.ok}
+                    <!-- No id, no editor: acting on a row this app cannot
+                         address would act on whichever row the address happened
+                         to name. -->
+                    <span
+                      class="unaddressable"
+                      data-testid={`row-unaddressable-${i}`}
+                      title={ROW_ID_EXPLANATION[id.reason]}>no id</span
+                    >
+                  {:else if confirming === id.id}
+                    <button
+                      class="danger"
+                      data-testid={`row-delete-confirm-${i}`}
+                      disabled={editBusy}
+                      onclick={() => deleteRow(id.id)}>really delete</button
+                    >
+                    <button
+                      data-testid={`row-delete-cancel-${i}`}
+                      disabled={editBusy}
+                      onclick={() => (confirming = null)}>keep</button
+                    >
+                  {:else}
+                    <button
+                      data-testid={`row-edit-${i}`}
+                      disabled={editBusy}
+                      onclick={() => void startUpdate(id.id)}>edit</button
+                    >
+                    <button
+                      class="danger"
+                      data-testid={`row-delete-${i}`}
+                      disabled={editBusy}
+                      onclick={() => confirmDelete(id.id)}>delete</button
+                    >
+                  {/if}
+                </td>
+              {/if}
               {#each columns as c (c.name)}
                 {@const cut = cuts.get(cutKey(i, c.name))}
                 <td>
@@ -468,6 +690,11 @@
     margin: 0;
     color: #a00;
   }
+  .ok {
+    margin: 0;
+    color: #1c5c38;
+    font-size: 0.75rem;
+  }
   .grid-wrap {
     overflow-x: auto;
     border: 1px solid #eee;
@@ -510,6 +737,34 @@
   }
   .null {
     color: #bbb;
+    font-style: italic;
+  }
+  table.grid td.acts,
+  table.grid th.acts {
+    white-space: nowrap;
+    background: #fbfbfb;
+  }
+  table.grid td.acts button {
+    font: inherit;
+    font-size: 0.68rem;
+    padding: 0 0.3rem;
+    margin-right: 0.2rem;
+    border: 1px solid #d5d5d5;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+  }
+  table.grid td.acts button.danger {
+    color: #a00;
+    border-color: #e5c8c8;
+  }
+  table.grid td.acts button:disabled {
+    color: #bbb;
+    cursor: default;
+  }
+  .unaddressable {
+    color: #aaa;
+    font-size: 0.68rem;
     font-style: italic;
   }
   /* A cut value must not look like a whole one: the badge rides next to the

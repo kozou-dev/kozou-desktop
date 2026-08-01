@@ -204,6 +204,56 @@ describe.skipIf(!url)('row data against a real database', () => {
     }
   });
 
+  it('hands a date back as the server wrote it, not as an instant derived from it', async () => {
+    // The driver's default parser turns a `date` into a Date at LOCAL midnight,
+    // so rendering it as an instant moves it: `2026-08-01` becomes
+    // `2026-07-31T15:00:00.000Z` under a UTC+9 clock. That is a browse cell
+    // naming the wrong day and — worse — an edit form offering the wrong day
+    // back for saving, since the editor seeds from this very path. The runner's
+    // pool therefore keeps this family as PostgreSQL's own text.
+    //
+    // Asserting the string equals the stored date is what fails if the override
+    // is removed: a Date would arrive here instead, and (under any non-UTC
+    // clock) one naming a different day.
+    const day = '2026-08-01';
+    await pool.query('INSERT INTO customers (name, email, birthday) VALUES ($1, $2, $3)', [
+      'Date fidelity',
+      BULK_MARK,
+      day,
+    ]);
+    try {
+      const page = await readRunner.run({
+        kind: 'list',
+        resource: 'customers',
+        params: { filters: [['email', `eq.${BULK_MARK}`]] },
+      });
+      expect(page.ok).toBe(true);
+      const [only] = rowsOf(page);
+      expect(only?.birthday).toBe(day);
+
+      // The same on the path the editor reads through.
+      const full = await readRunner.run({
+        kind: 'get',
+        resource: 'customers',
+        id: String(only!.id),
+      });
+      expect(row(full).birthday).toBe(day);
+
+      // And the text is accepted back unchanged, which is the property that
+      // makes it safe to seed an editor with.
+      const saved = await writeRunner.run({
+        kind: 'update',
+        resource: 'customers',
+        id: String(only!.id),
+        values: { birthday: String(row(full).birthday) },
+      });
+      expect(saved.ok).toBe(true);
+      expect(row(saved).birthday).toBe(day);
+    } finally {
+      await pool.query('DELETE FROM customers WHERE email = $1', [BULK_MARK]);
+    }
+  });
+
   it('refuses a mutation on a read runner and leaves the table unchanged', async () => {
     const before = await pool.query<{ n: string }>('SELECT count(*)::text AS n FROM customers');
     const result = await readRunner.run({

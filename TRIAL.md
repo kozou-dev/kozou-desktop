@@ -10,15 +10,20 @@ different projects) for a couple of weeks, the way you normally work. There is
 nothing to configure beyond adding your connection profiles.
 
 A least-privilege **read-only** connection role is all you need. Introspection
-runs inside a `READ ONLY` transaction, and so does row browsing — the one part
-of the app that touches row data at all. Browsing is **off for every profile**
-until you turn it on from the profile card and approve a system dialog; the card
-shows the current level either way, and editing a profile's connection turns
-browsing back off so the next attempt asks again. Row **editing** has no screen
-yet. Wherever row values are shown they are displayed only: never uploaded,
-never written to disk, never logged — and large values are cut short before they
-even reach the window, so the Data tab is a preview rather than a way to read a
-big value in full.
+runs inside a `READ ONLY` transaction, and so does row browsing — and so does
+every read the editor makes. Browsing is **off for every profile** until you turn
+it on from the profile card and approve a system dialog; the card shows the
+current level either way, and editing a profile's connection turns browsing back
+off so the next attempt asks again.
+
+Row **editing** is a second, separate opt-in on the same card, with its own
+system dialog — a browsing grant never becomes a writing one on its own, and a
+read-only role cannot perform it whatever the app is told. Turn it on only if
+you want to try it; nothing else in the app needs it. Wherever row values are
+shown they are displayed only: never uploaded, never written to disk, never
+logged — and large values are cut short before they even reach the window, so the
+Data tab is a preview rather than a way to read a big value in full (an editor
+re-reads its row in full first, so it never saves a shortened value back).
 
 The map is what we are asking about — treat the Data tab as incidental unless
 reaching for it tells you something about the map.

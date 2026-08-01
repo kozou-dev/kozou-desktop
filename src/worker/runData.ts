@@ -4,7 +4,7 @@
 // the integration test can drive it in plain Node — the same philosophy as
 // runMcpServer.ts.
 //
-// Four disciplines live here, each load-bearing (see EGRESS.md items 8 and 12):
+// Six disciplines live here, each load-bearing (see EGRESS.md items 8 and 12):
 //
 //   1. The transaction is ours. handleApiRequest opens none, so every
 //      operation runs inside an explicit BEGIN — and every read path uses
@@ -31,6 +31,10 @@
 //      `bytea` values is an ordinary schema away — so rowBudget.ts cuts
 //      oversized values here and every cut is reported (see rowBudget.ts for
 //      what this deliberately does not bound).
+//   6. Date, time and interval values are handed over as PostgreSQL's own text.
+//      The driver's parsers for that family are not round-trippable, and this
+//      is the path a row editor reads a value through before writing it back
+//      (see TEXTUAL_OIDS).
 
 import {
   buildResourceLookup,
@@ -40,7 +44,7 @@ import {
   type Queryable,
   type ResourceLookup,
 } from '@kozou/api';
-import { Pool } from 'pg';
+import { Pool, types as pgTypes } from 'pg';
 import {
   DATA_LOG_PREFIX,
   type DataCapability,
@@ -74,6 +78,46 @@ const POOL_MAX = 2;
  *  once a statement runs, so connect has to be bounded separately or a stalled
  *  network path hangs an operation with nothing to cut it short. */
 const CONNECT_TIMEOUT_MS = 10_000;
+
+/** Date/time (and interval) type OIDs, with their array forms, handed over as
+ *  PostgreSQL's own text rather than as JavaScript objects.
+ *
+ *  The driver's default parsers are not round-trippable for this family, and a
+ *  row editor writes values back. A `date` is parsed into a Date at LOCAL
+ *  midnight, so rendering it as an instant moves it: measured here, `2026-08-01`
+ *  becomes `2026-07-31T15:00:00.000Z` under a UTC+9 clock — a browse cell that
+ *  names the wrong day, and an edit form that would offer that wrong day back
+ *  for saving. `timestamp without time zone` has the same shape of problem
+ *  (local wall clock reinterpreted as an instant), and an `interval` parses into
+ *  an object with no textual form PostgreSQL accepts back at all.
+ *
+ *  Keeping the text avoids every one of those: it is exactly what the server
+ *  said, it renders as itself, and it is valid input for the same column. The
+ *  override is scoped to this pool, so introspection — which runs in this same
+ *  process — keeps the driver's defaults. */
+const TEXTUAL_OIDS = new Set([
+  1082, 1182, // date, date[]
+  1083, 1183, // time, time[]
+  1114, 1115, // timestamp, timestamp[]
+  1184, 1185, // timestamptz, timestamptz[]
+  1266, 1270, // timetz, timetz[]
+  1186, 1187, // interval, interval[]
+]);
+
+const asIs = (value: string): string => value;
+
+/** Text-format parsers only. Binary results would not be text to pass through,
+ *  and the driver does not request them here — but deferring to the default in
+ *  that case keeps this an override of what we mean to override. */
+const dataTypeParsers = {
+  getTypeParser: ((oid: number, format?: unknown) =>
+    format !== 'binary' && TEXTUAL_OIDS.has(oid)
+      ? asIs
+      : (pgTypes.getTypeParser as (o: number, f?: unknown) => unknown)(
+          oid,
+          format,
+        )) as typeof pgTypes.getTypeParser,
+};
 
 /** A pooled client: queryable and returnable. A pg PoolClient satisfies it. */
 export type DataClient = Queryable & { release(err?: boolean | Error): void };
@@ -405,6 +449,9 @@ export async function openDataRunner(config: DataRunnerConfig): Promise<DataRunn
   const pool = new Pool({
     connectionString: config.url,
     max: POOL_MAX,
+    // Scoped to this pool: the introspection connections opened above (and any
+    // opened later in this process) keep the driver's default parsers.
+    types: dataTypeParsers,
     // Acquiring a connection is outside `statement_timeout`, so without this a
     // stalled network path would block an operation indefinitely — the parent's
     // hang guard would fire while the worker stayed stuck on connect.
