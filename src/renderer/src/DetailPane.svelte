@@ -95,20 +95,34 @@
     return null;
   });
 
-  type OpenEditor = { target: CommentTarget; label: string; current: string | null | undefined };
+  type OpenEditor = {
+    /** What the editor was opened against: the relation, and the payload the
+     *  seed was copied out of. Both are CHECKED rather than cleared by an
+     *  effect. An effect runs after the DOM has been rendered from the new
+     *  selection, so a column of the same name on another relation would render
+     *  the previous relation's text for a frame — with the previous relation as
+     *  its emit target. Deriving the answer instead means there is no frame in
+     *  which that is true. */
+    for: string;
+    from: ContextView;
+    target: CommentTarget;
+    label: string;
+    current: string | null | undefined;
+  };
   let editing = $state<OpenEditor | null>(null);
 
-  $effect(() => {
-    // A different relation — or the same one re-inspected — invalidates an open
-    // editor: its seed is a copy of a payload that no longer applies.
-    void selected;
-    void context;
-    editing = null;
-  });
+  /** The open editor, if it still belongs to what is on screen. A different
+   *  relation, or the same one re-inspected, invalidates it: its seed is a copy
+   *  of a payload that no longer applies. */
+  const activeEditor = $derived(
+    editing !== null && editing.for === selected && editing.from === context ? editing : null,
+  );
 
   function editRelation(): void {
     if (relationTarget === null || !entity) return;
     editing = {
+      for: selected,
+      from: context,
       target: relationTarget,
       label: describeTarget(relationTarget),
       current: entity.rawComment,
@@ -123,12 +137,18 @@
       relation: entity.name,
       column: name,
     };
-    editing = { target, label: describeTarget(target), current };
+    editing = {
+      for: selected,
+      from: context,
+      target,
+      label: describeTarget(target),
+      current,
+    };
   }
 
   function draft(sql: string): void {
-    if (editing === null) return;
-    ondraft(editing.label, sql);
+    if (activeEditor === null) return;
+    ondraft(activeEditor.label, sql);
     editing = null;
   }
 </script>
@@ -181,11 +201,11 @@
           </p>
         {/if}
       </section>
-      {#if editing !== null && editing.target.kind !== 'column'}
+      {#if activeEditor !== null && activeEditor.target.kind !== 'column'}
         <CommentEditor
-          target={editing.target}
-          label={editing.label}
-          current={editing.current}
+          target={activeEditor.target}
+          label={activeEditor.label}
+          current={activeEditor.current}
           ondraft={draft}
           oncancel={() => (editing = null)}
         />
@@ -234,13 +254,13 @@
                   >
                 </td>
               </tr>
-              {#if editing !== null && editing.target.kind === 'column' && editing.target.column === c.name}
+              {#if activeEditor !== null && activeEditor.target.kind === 'column' && activeEditor.target.column === c.name}
                 <tr>
                   <td colspan="4">
                     <CommentEditor
-                      target={editing.target}
-                      label={editing.label}
-                      current={editing.current}
+                      target={activeEditor.target}
+                      label={activeEditor.label}
+                      current={activeEditor.current}
                       ondraft={draft}
                       oncancel={() => (editing = null)}
                     />

@@ -223,9 +223,17 @@
     drafts = drafts.filter((d) => d.profile !== selectedProfile);
   }
 
-  function copyDrafts(text: string): void {
-    copyText(text);
-    draftStatus = 'Copied to the clipboard.';
+  async function copyDrafts(text: string): Promise<void> {
+    // Reported from the outcome, not from having asked. The clipboard API can
+    // refuse (a window that is not focused, a platform that declines), and a
+    // panel that says "Copied" when nothing was copied sends the operator to
+    // paste something that is not there.
+    try {
+      await navigator.clipboard.writeText(text);
+      draftStatus = 'Copied to the clipboard.';
+    } catch {
+      draftStatus = 'The clipboard refused - the statements are above, select and copy them.';
+    }
   }
 
   async function saveDrafts(text: string): Promise<void> {
