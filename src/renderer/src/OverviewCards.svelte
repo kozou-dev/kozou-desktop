@@ -163,9 +163,9 @@
         {#if rowAccessPending === p.name}
           <span class="ra-wait">waiting for approval...</span>
         {:else if p.rowAccess === 'off'}
-          <!-- Only 'read' is offered here: the row editor lands with the write
-               forms, and a grant with no UI behind it is a capability nobody
-               asked for. -->
+          <!-- Browsing first, editing as its own step. Each level is a separate
+               native approval, so nobody arrives at write access by clicking
+               once — and the dialog for editing says what editing costs. -->
           <span
             class="linkish"
             role="button"
@@ -176,6 +176,17 @@
             >enable browsing</span
           >
         {:else}
+          {#if p.rowAccess === 'read'}
+            <span
+              class="linkish danger"
+              role="button"
+              tabindex="0"
+              data-testid={`rowaccess-edit-${p.name}`}
+              onclick={(e) => act(e, () => onrowaccess(p.name, 'readwrite'))}
+              onkeydown={(e) => e.key === 'Enter' && act(e, () => onrowaccess(p.name, 'readwrite'))}
+              >enable editing</span
+            >
+          {/if}
           <span
             class="linkish danger"
             role="button"

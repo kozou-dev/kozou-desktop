@@ -499,4 +499,29 @@ describe('browse page budget at the runner boundary', () => {
     expect(result.truncated).toBeUndefined();
     expect(((result.body as Record<string, unknown>).name as string).length).toBe(long.length);
   });
+
+  it('cuts the row a mutation returns, and says it did', async () => {
+    // A mutation comes back with every exposed column of the affected row, so
+    // editing one short column of a row that also holds a large value would
+    // otherwise carry that value across both IPC hops for a reply the UI reads
+    // only the outcome of. The write itself is untouched: this is the reply.
+    const h = harness('readwrite', [{ rows: [{ id: 1, name: long }] }]);
+    const result = await h.runner.run({
+      kind: 'update',
+      resource: 'customers',
+      id: '1',
+      values: { email: 'ada@example.com' },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.truncated).toEqual([
+      { row: 0, column: 'name', kind: 'text', size: long.length },
+    ]);
+    expect(((result.body as Record<string, unknown>).name as string).length).toBe(
+      DATA_VALUE_BUDGET,
+    );
+    // Paired with the `get` case above, this is what makes the runner-side rule
+    // observable: the same single-row shape is bounded here and not there.
+  });
 });

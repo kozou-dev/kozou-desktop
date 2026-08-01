@@ -335,6 +335,7 @@ test('a failed IPC leaves neither the badge nor the traversal position lying', a
                 id: 999,
                 name: after === undefined ? 'no-cursor' : 'cursor-retained',
                 email: null,
+                birthday: '2026-08-01',
                 created_at: null,
               },
             ],
@@ -366,7 +367,11 @@ test('a failed IPC leaves neither the badge nor the traversal position lying', a
         ok: true,
         status: 200,
         body: {
-          rows: [{ id: 1, name: 'has-json', email: null, created_at: null }],
+          // Every column of the real relation: a key absent from the row would
+          // render as a NULL cell and be counted as one below.
+          rows: [
+            { id: 1, name: 'has-json', email: null, birthday: '2026-08-01', created_at: null },
+          ],
           total: null,
           nextCursor: null,
           prevCursor: null,

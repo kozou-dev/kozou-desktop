@@ -44,6 +44,22 @@
     !entity &&
       context.views.some((v) => v.underlyingTables.some((u) => `${u.schema}.${u.name}` === selected)),
   );
+  /** Whether the browse panel may offer write controls for what is selected.
+   *  Three conditions, each of which is a different kind of "no":
+   *
+   *    * the grant: 'readwrite' is what main's gate requires, so anything less
+   *      would only produce a refusal;
+   *    * a view: kozou answers a write to one with a 405, and offering the
+   *      controls anyway would be a promise the REST layer never made;
+   *    * no primary key: an item route is addressed by one, so there is no id
+   *      to send and no row to send it about.
+   *
+   *  Nothing below this depends on the grant alone — the panel is handed the
+   *  conclusion, not the level. */
+  const canEdit = $derived(
+    rowAccess === 'readwrite' && table !== null && table.primaryKey.length > 0,
+  );
+
   const concept = $derived(view ? (context.concepts.find((c) => c.name === view.name) ?? null) : null);
   const aiText = $derived.by(() => {
     if (table) return aiViews.tables[selected] ?? null;
@@ -186,6 +202,8 @@
           resource={entity.qualifiedName}
           columns={entity.columns}
           primaryKey={table?.primaryKey ?? []}
+          relations={table?.relations ?? []}
+          {canEdit}
         />
       {/key}
     {:else if activeTab === 'ai'}

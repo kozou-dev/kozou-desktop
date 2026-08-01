@@ -10,7 +10,7 @@
 // PostgreSQL page (data.integration.test.ts).
 
 import { describe, expect, it } from 'vitest';
-import { boundListPage } from '../src/worker/rowBudget.js';
+import { boundListPage, boundReturnedRow } from '../src/worker/rowBudget.js';
 import {
   DATA_CELL_PREVIEW_CHARS,
   DATA_MAX_CONTROL_CHARS,
@@ -136,14 +136,33 @@ describe('row page budget', () => {
   });
 
   it('leaves a single-row body whole: a get result is not a page', () => {
-    // Why the `get` path is protected twice — the runner does not offer it to
-    // the budget at all, AND a single row is not a shape this function cuts.
-    // Neither half alone is observable, which is worth stating rather than
-    // implying that removing the runner-side check would be caught here.
+    // The page pass only ever descends into `rows`. Which single-row replies are
+    // bounded is the runner's decision (a mutation yes, a `get` no), taken with
+    // boundReturnedRow below.
     const long = 'x'.repeat(DATA_VALUE_BUDGET + 1);
     const singleRow: Record<string, unknown> = { id: 1, bio: long };
     expect(boundListPage(singleRow).cuts).toEqual([]);
     expect(singleRow.bio).toBe(long);
+  });
+
+  it('bounds a returned row by the same per-value rule, reported as row 0', () => {
+    // What a mutation comes back with: every exposed column of the affected
+    // row, including any large value the statement never touched.
+    const long = 'x'.repeat(DATA_VALUE_BUDGET + 5);
+    const returned: Record<string, unknown> = { id: 7, bio: long, note: 'short' };
+    const cuts = boundReturnedRow(returned);
+    expect(cuts).toEqual([
+      { row: 0, column: 'bio', kind: 'text', size: DATA_VALUE_BUDGET + 5 },
+    ]);
+    expect((returned.bio as string).length).toBe(DATA_VALUE_BUDGET);
+    expect(returned.note).toBe('short');
+    expect(returned.id).toBe(7);
+  });
+
+  it('reports nothing for a returned body that is not a row', () => {
+    expect(boundReturnedRow(null)).toEqual([]);
+    expect(boundReturnedRow([{ bio: 'x' }])).toEqual([]);
+    expect(boundReturnedRow('text')).toEqual([]);
   });
 
   it('never lets the pane promise more text than the wire carries', () => {
