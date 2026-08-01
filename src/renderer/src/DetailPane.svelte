@@ -108,6 +108,12 @@
     target: CommentTarget;
     label: string;
     current: string | null | undefined;
+    /** What has been typed so far. Held HERE rather than in the editor
+     *  component: the editor renders inside the Semantics branch, so visiting
+     *  another tab unmounts it — and a value that lived in the child would come
+     *  back as the database seed, with the operator's text discarded and nothing
+     *  said about it. */
+    text: string;
   };
   let editing = $state<OpenEditor | null>(null);
 
@@ -126,6 +132,7 @@
       target: relationTarget,
       label: describeTarget(relationTarget),
       current: entity.rawComment,
+      text: entity.rawComment ?? '',
     };
   }
 
@@ -143,6 +150,7 @@
       target,
       label: describeTarget(target),
       current,
+      text: current ?? '',
     };
   }
 
@@ -150,6 +158,11 @@
     if (activeEditor === null) return;
     ondraft(activeEditor.label, sql);
     editing = null;
+  }
+
+  function retype(next: string): void {
+    if (editing === null) return;
+    editing = { ...editing, text: next };
   }
 </script>
 
@@ -190,6 +203,15 @@
         </h4>
         {#if entity.description}
           <pre class="comment">{entity.description}</pre>
+        {:else if entity.rawComment}
+          <!-- The rendered description is empty while the COMMENT is not: one
+               made only of `@widget:`/`@example:` lifts entirely out of that
+               field. Answering "no COMMENT" from it would be the same mistake
+               this feature exists to avoid, so the verbatim text answers. -->
+          <p class="hint">
+            This COMMENT is made entirely of tags that are surfaced elsewhere - Edit shows it as
+            written.
+          </p>
         {:else}
           <p class="hint">No COMMENT on this relation.</p>
         {/if}
@@ -206,6 +228,8 @@
           target={activeEditor.target}
           label={activeEditor.label}
           current={activeEditor.current}
+          text={activeEditor.text}
+          ontext={retype}
           ondraft={draft}
           oncancel={() => (editing = null)}
         />
@@ -261,6 +285,8 @@
                       target={activeEditor.target}
                       label={activeEditor.label}
                       current={activeEditor.current}
+                      text={activeEditor.text}
+                      ontext={retype}
                       ondraft={draft}
                       oncancel={() => (editing = null)}
                     />

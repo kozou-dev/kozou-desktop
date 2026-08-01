@@ -118,6 +118,18 @@ test('comment editor: seeded verbatim, emits per relation kind, applies nothing'
     const before = await storedComment('public.customer_totals');
     await text.fill('Edited by the e2e run.\n@ai: still here');
     await expect(page.getByTestId('comment-unchanged')).toHaveCount(0);
+
+    // --- the typed text survives leaving the tab -----------------------------
+    // The editor renders inside the Semantics branch, so another tab unmounts
+    // it. If the value lived in that component it would come back as the
+    // database seed, silently replacing what was typed.
+    await page.getByTestId('tab-ai').click();
+    await expect(page.getByTestId('comment-editor')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Semantics' }).click();
+    await expect(page.getByTestId('comment-text')).toHaveValue(
+      'Edited by the e2e run.\n@ai: still here',
+    );
+
     await page.getByTestId('comment-draft').click();
 
     // --- the draft lands, and the database is untouched ----------------------

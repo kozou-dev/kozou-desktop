@@ -12,13 +12,14 @@
   // would introduce a round trip this feature does not need and could not make
   // lossless.
 
-  import { untrack } from 'svelte';
   import { commentTextProblem, emitComment, type CommentTarget } from './lib/commentEmit';
 
   let {
     target,
     label,
     current,
+    text,
+    ontext,
     ondraft,
     oncancel,
   }: {
@@ -30,14 +31,15 @@
      *  a build before this field existed — and the editor refuses rather than
      *  seed from a processed form. */
     current: string | null | undefined;
+    /** What has been typed. Owned by the PANE, not by this component: the editor
+     *  renders inside the Semantics branch, so visiting another tab unmounts it,
+     *  and a value living here would be replaced by the database seed on the way
+     *  back — silently, with the operator's text gone. */
+    text: string;
+    ontext: (next: string) => void;
     ondraft: (sql: string) => void;
     oncancel: () => void;
   } = $props();
-
-  // Seeded once: the pane keys this component on what is being edited, so a
-  // different target arrives as a different instance. Re-seeding on a prop
-  // change would drop half-typed input (same intent as RowForm).
-  let text = $state(untrack(() => current ?? ''));
 
   const known = $derived(current !== undefined);
   // An empty body IS removal: PostgreSQL stores no such thing as an empty
@@ -75,7 +77,8 @@
     <textarea
       data-testid="comment-text"
       rows="6"
-      bind:value={text}
+      value={text}
+      oninput={(e) => ontext(e.currentTarget.value)}
       spellcheck="false"
       placeholder="Plain text. @ai: and @policy: lines are part of the comment and are kept as written."
     ></textarea>

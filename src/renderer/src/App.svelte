@@ -37,10 +37,14 @@
   const bumpToken = (name: string): void => {
     profileTokens.set(name, (profileTokens.get(name) ?? 0) + 1);
     profileEpoch += 1;
-    // Drafted comment statements name relations in a specific database. A
-    // profile that was repointed, re-saved or deleted is no longer necessarily
-    // that database, so its drafts stop being offered rather than follow the
-    // name to somewhere they may not apply.
+  };
+  /** Drop a profile's drafted statements. They name relations in a specific
+   *  database, so a profile that was repointed, re-saved or deleted stops
+   *  offering them rather than letting them follow the name somewhere they may
+   *  not apply. Deliberately NOT part of bumpToken: the token is bumped BEFORE
+   *  the store is asked, so that an in-flight inspect cannot land, and a refused
+   *  delete would then have discarded work while changing nothing. */
+  const dropDrafts = (name: string): void => {
     drafts = drafts.filter((d) => d.profile !== name);
   };
 
@@ -204,13 +208,29 @@
   // dropped the moment that profile stops being the same thing (see bumpToken).
   let drafts = $state<CommentDraft[]>([]);
   let draftStatus = $state<string | null>(null);
+  /** Which profile, and which exact draft set, the status was produced for. */
+  let draftStatusKey = $state<string | null>(null);
   let nextDraftId = 0;
 
   const currentDrafts = $derived(drafts.filter((d) => d.profile === selectedProfile));
+  /** The status describes a specific set of statements at a specific moment, so
+   *  it is shown only while that is still what the panel holds. Switching
+   *  profiles, or adding/removing a draft, makes "Copied"/"Saved" a claim about
+   *  something the operator is no longer looking at. */
+  const draftStatusFor = $derived(
+    draftStatusKey === `${selectedProfile}|${currentDrafts.map((d) => d.id).join(',')}`
+      ? draftStatus
+      : null,
+  );
+  function setDraftStatus(text: string | null): void {
+    draftStatus = text;
+    draftStatusKey =
+      text === null ? null : `${selectedProfile}|${currentDrafts.map((d) => d.id).join(',')}`;
+  }
 
   function addDraft(target: string, sql: string): void {
     if (selectedProfile === null) return;
-    draftStatus = null;
+    setDraftStatus(null);
     drafts = [...drafts, { id: (nextDraftId += 1), profile: selectedProfile, target, sql }];
   }
 
@@ -219,7 +239,7 @@
   }
 
   function clearCurrentDrafts(): void {
-    draftStatus = null;
+    setDraftStatus(null);
     drafts = drafts.filter((d) => d.profile !== selectedProfile);
   }
 
@@ -230,9 +250,9 @@
     // paste something that is not there.
     try {
       await navigator.clipboard.writeText(text);
-      draftStatus = 'Copied to the clipboard.';
+      setDraftStatus('Copied to the clipboard.');
     } catch {
-      draftStatus = 'The clipboard refused - the statements are above, select and copy them.';
+      setDraftStatus('The clipboard refused - the statements are above, select and copy them.');
     }
   }
 
@@ -240,9 +260,9 @@
     const suggested = selectedProfile === null ? 'comments.sql' : `${selectedProfile}-comments.sql`;
     try {
       const { saved } = await api.saveSqlFile(suggested, text);
-      draftStatus = saved ? 'Saved. Apply it yourself - this app runs nothing.' : null;
+      setDraftStatus(saved ? 'Saved. Apply it yourself - this app runs nothing.' : null);
     } catch (err) {
-      draftStatus = `Not saved: ${message(err)}`;
+      setDraftStatus(`Not saved: ${message(err)}`);
     }
   }
 
@@ -310,6 +330,7 @@
       // duplicate warning refers to the previous database.
       if (duplicatePending?.profile === name) duplicatePending = null;
       bumpToken(name);
+      dropDrafts(name);
       delete results[name];
       applyMcpStatus(await api.mcpStatus());
       await inspect(name);
@@ -326,6 +347,7 @@
       formError = message(err);
       return;
     }
+    dropDrafts(name);
     delete results[name];
     if (duplicatePending?.profile === name) duplicatePending = null;
     if (snippetFor === name) snippetFor = null;
@@ -526,7 +548,7 @@
         {#if currentDrafts.length > 0}
           <DraftPanel
             drafts={currentDrafts}
-            status={draftStatus}
+            status={draftStatusFor}
             onremove={removeDraft}
             onclear={clearCurrentDrafts}
             oncopy={copyDrafts}
