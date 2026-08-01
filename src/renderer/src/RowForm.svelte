@@ -83,9 +83,23 @@
   }
 
   function setSource(name: string, source: Source): void {
+    const field = fields.find((f) => f.column === name);
+    const column = byName.get(name);
+    // A boolean control has no "unset" position to show: it renders `false`
+    // whether or not anything was chosen. Answering "value" while the field is
+    // still empty would then send an empty string behind a control reading
+    // `false` — so the displayed answer becomes the actual one.
+    const text =
+      source === 'value' &&
+      field?.text === '' &&
+      column !== undefined &&
+      controlKind(column) === 'boolean'
+        ? 'false'
+        : undefined;
     update(name, {
       touched: source !== 'skip',
       isNull: source === 'null',
+      ...(text !== undefined ? { text } : {}),
     });
   }
 

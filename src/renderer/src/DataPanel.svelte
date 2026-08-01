@@ -168,6 +168,11 @@
     const mine = ++seq;
     loading = true;
     error = null;
+    // A notice describes the write that produced these rows. Anything that
+    // fetches a different page invalidates it — "Row inserted." left standing
+    // over a page the insert is not on would be a claim about rows nobody
+    // checked. `write` re-states it after its own reload lands.
+    notice = null;
     const params: DataListParams = {
       pageSize,
       ...(sortSpec !== undefined ? { sort: sortSpec } : {}),
@@ -359,8 +364,11 @@
     }
     editing = null;
     confirming = null;
-    notice = done;
-    void load(pos);
+    // Announced once the re-read lands, so the sentence and the rows it is
+    // about appear together — and so `load`'s own clearing of it (any other
+    // navigation invalidates a notice) does not race this one away.
+    await load(pos);
+    if (mine === editSeq) notice = done;
   }
 
   function saveRow(values: Record<string, unknown>): void {
