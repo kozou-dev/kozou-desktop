@@ -11,6 +11,7 @@ import { trimContext } from '../shared/trim.js';
 import { sanitizeErrorMessage } from '../shared/url.js';
 import type { AiViews, InspectResult, WorkerRequest } from '../shared/types.js';
 import { buildAiViews } from './aiViews.js';
+import { fetchMaterializedViews } from './relkind.js';
 import { runInspect } from './runInspect.js';
 
 const ENV_KEY = 'KOZOU_DESKTOP_DB_URL';
@@ -42,8 +43,19 @@ async function handle(req: WorkerRequest): Promise<void> {
         timeoutMs: req.timeoutMs,
       });
       const aiViews: AiViews = buildAiViews(context);
+      // One extra catalog read, after introspection has closed its own
+      // connection: the one fact the raw records cannot carry (see relkind.ts).
+      // It rides the renderer payload only — the SchemaContext itself stays
+      // byte-identical to the CLI's, which the contract test pins.
+      const materializedViews = await fetchMaterializedViews({
+        url,
+        schemas: req.schemas,
+        timeoutMs: req.timeoutMs,
+      });
       const fullJson = JSON.stringify(context);
-      const trimmed = trimContext(context as unknown as Record<string, unknown>);
+      const trimmed = trimContext(context as unknown as Record<string, unknown>, {
+        ...(materializedViews !== undefined ? { materializedViews } : {}),
+      });
       const trimmedJson = JSON.stringify(trimmed);
       result = {
         ok: true,

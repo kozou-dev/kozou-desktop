@@ -358,10 +358,23 @@ export type KozouDesktopApi = {
     values: Record<string, unknown>,
   ): Promise<DataResult>;
   dataDelete(name: string, resource: string, id: string): Promise<DataResult>;
+  /** Write drafted SQL to a file the user picks in a native save dialog. No
+   *  database is involved: the statements are text this app generated and never
+   *  ran. Resolves `{ saved: false }` when the dialog is dismissed. */
+  saveSqlFile(suggestedName: string, sql: string): Promise<SaveSqlOutcome>;
   /** Subscribe to status pushes (server exit, restore progress). Returns an
    *  unsubscribe function. */
   onMcpStatusChanged(listener: (entries: McpStatusEntry[]) => void): () => void;
 };
+
+/** Result of a save-to-file request. A dismissed dialog is not an error. */
+export type SaveSqlOutcome = { saved: boolean };
+
+/** Ceiling on a single SQL export, in characters. COMMENT statements for an
+ *  entire large schema stay orders of magnitude below this; the bound exists so
+ *  the one renderer-driven path that reaches the filesystem cannot be turned
+ *  into an unbounded write. */
+export const MAX_SQL_EXPORT_CHARS = 1_000_000;
 
 export const IPC = {
   profilesList: 'profiles:list',
@@ -382,6 +395,9 @@ export const IPC = {
   dataInsert: 'data:insert',
   dataUpdate: 'data:update',
   dataDelete: 'data:delete',
+  /** Save drafted DDL to a user-chosen file. Its own channel, and the only one
+   *  in the app that writes a file on the renderer's behalf. */
+  emitSaveSql: 'emit:save-sql',
   /** main -> renderer push (webContents.send), not an invoke channel. */
   mcpStatusChanged: 'mcp:status-changed',
 } as const;

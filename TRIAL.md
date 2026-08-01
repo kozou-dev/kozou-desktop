@@ -25,6 +25,12 @@ logged — and large values are cut short before they even reach the window, so 
 Data tab is a preview rather than a way to read a big value in full (an editor
 re-reads its row in full first, so it never saves a shortened value back).
 
+Editing a **COMMENT** is a different thing from both, and needs neither opt-in:
+the app writes the `COMMENT ON` statement and hands it to you — to the clipboard
+or to a `.sql` file you name — and applies none of it. A read-only role is
+therefore enough for that too. Apply the statements the way you apply any other
+schema change, and re-inspect to see them land.
+
 The map is what we are asking about — treat the Data tab as incidental unless
 reaching for it tells you something about the map.
 

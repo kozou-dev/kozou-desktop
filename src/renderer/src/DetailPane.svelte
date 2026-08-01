@@ -1,8 +1,10 @@
 <script lang="ts">
   import type { ContextView } from '../../shared/contextView';
   import type { AiViews, RowAccess } from '../../shared/types';
+  import CommentEditor from './CommentEditor.svelte';
   import DataPanel from './DataPanel.svelte';
   import JsonTree from './JsonTree.svelte';
+  import { describeTarget, type CommentTarget } from './lib/commentEmit';
 
   let {
     context,
@@ -11,11 +13,15 @@
     profile,
     rowAccess,
     epoch,
+    ondraft,
   }: {
     context: ContextView;
     aiViews: AiViews;
     selected: string;
     profile: string;
+    /** Hand a generated statement to the app's session draft list. The pane
+     *  never applies one: emitting is the whole of what this does. */
+    ondraft: (target: string, sql: string) => void;
     /** This profile's row-data grant. 'off' hides the Data tab entirely: with
      *  no grant, main refuses every `data:*` call, so offering the tab would
      *  only promise something the gate would then deny. */
@@ -74,6 +80,57 @@
   });
 
   const aiLines = (text: string | null): string[] => (text ? text.split('\n').filter((l) => l.trim() !== '') : []);
+
+  /** The relation as a COMMENT target, or null when it cannot be named in DDL.
+   *  The one case that happens: a view whose relkind could not be established —
+   *  `COMMENT ON VIEW` and `COMMENT ON MATERIALIZED VIEW` are not
+   *  interchangeable, and each is an error against the other kind, so guessing
+   *  would emit a statement the database rejects. Columns are unaffected:
+   *  `COMMENT ON COLUMN` addresses all three relation kinds alike. */
+  const relationTarget = $derived.by<CommentTarget | null>(() => {
+    if (table) return { kind: 'table', schema: table.schema, name: table.name };
+    if (view && view.materialized !== undefined) {
+      return { kind: 'view', schema: view.schema, name: view.name, materialized: view.materialized };
+    }
+    return null;
+  });
+
+  type OpenEditor = { target: CommentTarget; label: string; current: string | null | undefined };
+  let editing = $state<OpenEditor | null>(null);
+
+  $effect(() => {
+    // A different relation — or the same one re-inspected — invalidates an open
+    // editor: its seed is a copy of a payload that no longer applies.
+    void selected;
+    void context;
+    editing = null;
+  });
+
+  function editRelation(): void {
+    if (relationTarget === null || !entity) return;
+    editing = {
+      target: relationTarget,
+      label: describeTarget(relationTarget),
+      current: entity.rawComment,
+    };
+  }
+
+  function editColumn(name: string, current: string | null | undefined): void {
+    if (!entity) return;
+    const target: CommentTarget = {
+      kind: 'column',
+      schema: entity.schema,
+      relation: entity.name,
+      column: name,
+    };
+    editing = { target, label: describeTarget(target), current };
+  }
+
+  function draft(sql: string): void {
+    if (editing === null) return;
+    ondraft(editing.label, sql);
+    editing = null;
+  }
 </script>
 
 <aside class="detail" data-testid="detail-pane">
@@ -104,8 +161,34 @@
     </nav>
 
     {#if activeTab === 'human'}
-      {#if entity.description}
-        <section><h4>Comment</h4><pre class="comment">{entity.description}</pre></section>
+      <section>
+        <h4>
+          Comment
+          {#if relationTarget !== null}
+            <button class="edit" data-testid="edit-relation-comment" onclick={editRelation}>Edit</button>
+          {/if}
+        </h4>
+        {#if entity.description}
+          <pre class="comment">{entity.description}</pre>
+        {:else}
+          <p class="hint">No COMMENT on this relation.</p>
+        {/if}
+        {#if view && view.materialized === undefined}
+          <p class="hint" data-testid="relkind-unknown">
+            Whether this view is materialized could not be read from the catalog, and the two need
+            different <code>COMMENT ON</code> keywords - so no statement is offered for the view
+            itself. Its columns can still be commented. Re-inspect to try again.
+          </p>
+        {/if}
+      </section>
+      {#if editing !== null && editing.target.kind !== 'column'}
+        <CommentEditor
+          target={editing.target}
+          label={editing.label}
+          current={editing.current}
+          ondraft={draft}
+          oncancel={() => (editing = null)}
+        />
       {/if}
       {#if entity.aiDescription}
         <section>
@@ -143,7 +226,27 @@
                     ? ` [${c.enumValues.join(' | ')}]`
                     : ''}</td
                 >
+                <td class="cedit">
+                  <button
+                    class="edit"
+                    data-testid={`edit-column-comment-${c.name}`}
+                    onclick={() => editColumn(c.name, c.rawComment)}>Edit</button
+                  >
+                </td>
               </tr>
+              {#if editing !== null && editing.target.kind === 'column' && editing.target.column === c.name}
+                <tr>
+                  <td colspan="4">
+                    <CommentEditor
+                      target={editing.target}
+                      label={editing.label}
+                      current={editing.current}
+                      ondraft={draft}
+                      oncancel={() => (editing = null)}
+                    />
+                  </td>
+                </tr>
+              {/if}
             {/each}
           </tbody>
         </table>
@@ -322,6 +425,22 @@
   }
   .cdesc {
     color: #555;
+  }
+  .cedit {
+    text-align: right;
+    white-space: nowrap;
+  }
+  button.edit {
+    margin-left: 0.4rem;
+    padding: 0.05rem 0.4rem;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 0.7rem;
+    color: #35577d;
+    text-transform: none;
+    letter-spacing: 0;
   }
   .meaning {
     color: #1c5c38;

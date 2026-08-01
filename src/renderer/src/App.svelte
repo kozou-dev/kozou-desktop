@@ -8,12 +8,14 @@
     RowAccess,
   } from '../../shared/types';
   import DetailPane from './DetailPane.svelte';
+  import DraftPanel from './DraftPanel.svelte';
   import EnumsPanel from './EnumsPanel.svelte';
   import FunctionsPanel from './FunctionsPanel.svelte';
   import OverviewCards from './OverviewCards.svelte';
   import SearchBar from './SearchBar.svelte';
   import SemanticMap from './SemanticMap.svelte';
   import { buildMcpClientSnippets } from '../../shared/mcpSnippet';
+  import type { CommentDraft } from './lib/commentEmit';
 
   const api = window.kozouDesktop;
 
@@ -35,6 +37,11 @@
   const bumpToken = (name: string): void => {
     profileTokens.set(name, (profileTokens.get(name) ?? 0) + 1);
     profileEpoch += 1;
+    // Drafted comment statements name relations in a specific database. A
+    // profile that was repointed, re-saved or deleted is no longer necessarily
+    // that database, so its drafts stop being offered rather than follow the
+    // name to somewhere they may not apply.
+    drafts = drafts.filter((d) => d.profile !== name);
   };
 
   // Add-profile form
@@ -189,6 +196,46 @@
     // Best-effort: the snippet stays visible for manual copy if the
     // clipboard API refuses.
     void navigator.clipboard.writeText(text).catch(() => {});
+  }
+
+  // -- Drafted COMMENT statements ------------------------------------------
+  // Generated, never applied. Held for the session and per profile: a draft is
+  // an unapplied schema change written against one specific database, so it is
+  // dropped the moment that profile stops being the same thing (see bumpToken).
+  let drafts = $state<CommentDraft[]>([]);
+  let draftStatus = $state<string | null>(null);
+  let nextDraftId = 0;
+
+  const currentDrafts = $derived(drafts.filter((d) => d.profile === selectedProfile));
+
+  function addDraft(target: string, sql: string): void {
+    if (selectedProfile === null) return;
+    draftStatus = null;
+    drafts = [...drafts, { id: (nextDraftId += 1), profile: selectedProfile, target, sql }];
+  }
+
+  function removeDraft(id: number): void {
+    drafts = drafts.filter((d) => d.id !== id);
+  }
+
+  function clearCurrentDrafts(): void {
+    draftStatus = null;
+    drafts = drafts.filter((d) => d.profile !== selectedProfile);
+  }
+
+  function copyDrafts(text: string): void {
+    copyText(text);
+    draftStatus = 'Copied to the clipboard.';
+  }
+
+  async function saveDrafts(text: string): Promise<void> {
+    const suggested = selectedProfile === null ? 'comments.sql' : `${selectedProfile}-comments.sql`;
+    try {
+      const { saved } = await api.saveSqlFile(suggested, text);
+      draftStatus = saved ? 'Saved. Apply it yourself - this app runs nothing.' : null;
+    } catch (err) {
+      draftStatus = `Not saved: ${message(err)}`;
+    }
   }
 
   const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -462,11 +509,22 @@
               profile={selectedProfile}
               rowAccess={currentProfile?.rowAccess ?? 'off'}
               epoch={profileEpoch}
+              ondraft={addDraft}
             />
           {:else}
             <aside class="placeholder">Click a relation on the map to see its compiled semantics - and what a default-configured kozou server hands your AI for it.</aside>
           {/if}
         </div>
+        {#if currentDrafts.length > 0}
+          <DraftPanel
+            drafts={currentDrafts}
+            status={draftStatus}
+            onremove={removeDraft}
+            onclear={clearCurrentDrafts}
+            oncopy={copyDrafts}
+            onsave={saveDrafts}
+          />
+        {/if}
         <FunctionsPanel functions={currentContext.functions ?? []} aiText={current.aiViews.functions} />
         <EnumsPanel enums={currentContext.enums} />
       {:else}

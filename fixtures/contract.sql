@@ -71,6 +71,31 @@ COMMENT ON VIEW recent_orders IS 'Orders placed in the last 30 days, with custom
 @ai: Prefer this view over joining orders/customers by hand for recency questions.
 @policy: Totals here are gross amounts, before refunds.';
 
+-- A MATERIALIZED view, carrying the two tag forms the context builder lifts OUT
+-- of `description`: an `@example:` block on the relation and `@widget:` on a
+-- column. Both are load-bearing for the comment editor:
+--
+--   * relkind. Introspection reports 'v' and 'm' as one kind, but the DDL does
+--     not: `COMMENT ON VIEW` is an error against this relation. The desktop
+--     reads the distinction with its own catalog query.
+--   * verbatim text. An editor seeded from `description` would delete the
+--     `@example:` block and the `@widget:` tag on the first save, because
+--     neither survives into that field.
+CREATE MATERIALIZED VIEW customer_totals AS
+SELECT c.id AS customer_id,
+       c.name,
+       count(o.id) AS order_count,
+       coalesce(sum(o.total_cents), 0) AS total_cents
+FROM customers c
+LEFT JOIN orders o ON o.customer_id = c.id
+GROUP BY c.id, c.name;
+COMMENT ON MATERIALIZED VIEW customer_totals IS 'Per-customer order totals.
+@ai: Materialized - the numbers are as of the last REFRESH, not live.
+@example: Biggest spenders
+  SELECT name, total_cents FROM customer_totals ORDER BY total_cents DESC LIMIT 10;';
+COMMENT ON COLUMN customer_totals.total_cents IS 'Sum of this customer''s order totals, in cents.
+@widget: currency';
+
 INSERT INTO audit_log (action, noted_at, shift_start, span)
 VALUES ('fixture seeded', '2026-08-01 09:30:00', '09:30:00', '1 day 02:00:00');
 
@@ -78,3 +103,7 @@ INSERT INTO customers (name, email) VALUES ('Ada', 'ada@example.com'), ('Grace',
 INSERT INTO orders (customer_id, status, total_cents, placed_at)
 VALUES (1, 'placed', 12050, now() - interval '2 days'),
        (2, 'shipped', 990, now() - interval '10 days');
+
+-- The materialized view was created before these rows existed, so its snapshot
+-- is empty until it is told otherwise.
+REFRESH MATERIALIZED VIEW customer_totals;
