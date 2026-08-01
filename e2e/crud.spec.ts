@@ -199,12 +199,17 @@ test('row editing: a grant of its own, a real round trip, and controlled refusal
     await page.getByTestId('row-form-cancel').click();
     await expect(page.getByTestId('row-form')).toHaveCount(0);
 
-    // --- the form's own refusal, before anything is sent ---------------------
+    // --- a required column left empty is named, and still attempted ----------
+    // The form warns about a NOT NULL column with no default of its own - the
+    // database's own answer names no column - but it does not refuse: only
+    // PostgreSQL knows whether a trigger or a domain default fills it in.
     await page.getByTestId('data-new').click();
     await page.getByTestId('field-email').fill(SECOND_MARK);
     await page.getByTestId('row-form-save').click();
-    await expect(page.getByTestId('row-form-invalid')).toContainText('name');
-    // Nothing reached the database: no row carries that address.
+    await expect(page.getByTestId('row-form-warning')).toContainText('name');
+    // It was attempted and the database refused it, so no row carries that
+    // address - the warning is a warning, not a claim that nothing was sent.
+    await expect(page.getByTestId('row-form-error')).toBeVisible();
     const stray = await seeder.query('SELECT count(*)::int AS n FROM customers WHERE email = $1', [
       SECOND_MARK,
     ]);
@@ -236,6 +241,20 @@ test('row editing: a grant of its own, a real round trip, and controlled refusal
     await expect(page.getByTestId('data-panel')).toBeVisible();
     await expect(page.getByTestId('data-new')).toHaveCount(0);
     await expect(page.getByTestId('row-edit-0')).toHaveCount(0);
+
+    // --- nor a row whose key the page had to shorten -------------------------
+    // The budget cuts every oversized value a page carries, keys included. What
+    // is on screen is then the beginning of a key, which can be another row's
+    // key in full - so this row offers no controls at all, while the table
+    // itself still accepts a new row.
+    await page.getByTestId('map-node-public.long_key').click();
+    await expect(page.getByTestId('detail-pane')).toContainText('public.long_key');
+    await page.getByTestId('tab-data').click();
+    await expect(page.getByTestId('data-truncated')).toBeVisible();
+    await expect(page.getByTestId('row-unaddressable-0')).toBeVisible();
+    await expect(page.getByTestId('row-edit-0')).toHaveCount(0);
+    await expect(page.getByTestId('row-delete-0')).toHaveCount(0);
+    await expect(page.getByTestId('data-new')).toBeVisible();
 
     // --- neither does a table with no primary key ----------------------------
     await page.getByTestId('map-node-public.audit_log').click();

@@ -65,6 +65,10 @@
    *  database's). One is fixed by typing; the other may not be. */
   let localError = $state<string | null>(null);
 
+  /** Said before sending, never instead of sending: the form does not overrule
+   *  the database about what a row needs. */
+  let warnings = $state<string[]>([]);
+
   const byName = $derived(new Map(columns.map((c) => [c.name, c])));
 
   /** How a field is answered. The labels differ per mode because the meaning
@@ -80,6 +84,7 @@
   function update(name: string, change: Partial<FieldState>): void {
     fields = fields.map((f) => (f.column === name ? { ...f, ...change } : f));
     localError = null;
+    warnings = [];
   }
 
   function setSource(name: string, source: Source): void {
@@ -117,6 +122,7 @@
       localError = built.error;
       return;
     }
+    warnings = built.warnings ?? [];
     onsubmit(built.values);
   }
 
@@ -124,7 +130,8 @@
     'primary-key': 'primary key - identifies the row being edited',
     privilege: 'your role may not write this column',
     'hint-readonly': 'marked read-only by this schema\'s UI hints',
-    unrepresentable: 'this app cannot represent the stored value as text',
+    unrepresentable:
+      'the stored value has no text form this app can write back (a byte array, an array, a geometric type)',
   };
 
   /** The foreign key a column participates in, as a hint. A composite key is
@@ -251,6 +258,9 @@
   {#if localError}
     <p class="err" data-testid="row-form-invalid">{localError}</p>
   {/if}
+  {#each warnings as warning (warning)}
+    <p class="warn" data-testid="row-form-warning">{warning}</p>
+  {/each}
   {#if error}
     <!-- The database's answer, re-authored by the worker: a fixed sentence for
          every status except 400, which describes the input. -->
@@ -367,6 +377,11 @@
     margin: 0;
     color: #a00;
     font-size: 0.75rem;
+  }
+  .warn {
+    margin: 0;
+    color: #8a6d3b;
+    font-size: 0.72rem;
   }
   .actions {
     display: flex;

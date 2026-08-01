@@ -173,6 +173,11 @@
     // over a page the insert is not on would be a claim about rows nobody
     // checked. `write` re-states it after its own reload lands.
     notice = null;
+    // So does a pending delete: it names a row by key, and the rows about to
+    // arrive are not the rows it was clicked on. Between the two clicks another
+    // client could have deleted that key and reused it, which would leave the
+    // confirmation sitting over a row nobody looked at.
+    confirming = null;
     const params: DataListParams = {
       pageSize,
       ...(sortSpec !== undefined ? { sort: sortSpec } : {}),
@@ -286,8 +291,18 @@
    *  has moved on from. */
   let editSeq = 0;
 
-  const idFor = (row: Record<string, unknown>): ReturnType<typeof rowId> =>
-    rowId(primaryKey, row);
+  /** The id for the row at `index` on the page currently on screen.
+   *
+   *  The cuts are part of the question, not decoration: the page budget bounds
+   *  every oversized value it carries, keys included, so a shortened key on
+   *  screen is the beginning of a key — possibly of a different row's key in
+   *  full. `rowId` refuses those. */
+  function idFor(row: Record<string, unknown>, index: number): ReturnType<typeof rowId> {
+    const cutHere = new Set(
+      primaryKey.filter((column) => cuts.has(cutKey(index, column))),
+    );
+    return rowId(primaryKey, row, cutHere);
+  }
 
   function resetEdit(): void {
     editSeq += 1;
@@ -441,12 +456,18 @@
 </script>
 
 <div class="data" data-testid="data-panel">
+  <!-- Every traversal control is inert while a write is in flight. A write ends
+       by re-reading the page the panel is on, so a sort or page change taken
+       mid-flight would leave that re-read to fetch the old cursor under the new
+       ORDER BY - which kozou rejects, turning a successful write into an error
+       and an empty grid. -->
   <div class="controls">
     <label>
       sort
       <select
         data-testid="data-sort-column"
         value={sortColumn}
+        disabled={editBusy}
         onchange={(e) => changeSort(e.currentTarget.value)}
       >
         <option value="">(default order)</option>
@@ -460,7 +481,7 @@
     <select
       data-testid="data-sort-dir"
       value={sortDir}
-      disabled={sortColumn === ''}
+      disabled={sortColumn === '' || editBusy}
       onchange={(e) => changeDir(e.currentTarget.value as 'asc' | 'desc')}
     >
       <option value="asc">asc</option>
@@ -471,6 +492,7 @@
       <select
         data-testid="data-page-size"
         value={pageSize}
+        disabled={editBusy}
         onchange={(e) => changePageSize(Number(e.currentTarget.value))}
       >
         {#each PAGE_SIZES as size (size)}
@@ -478,9 +500,11 @@
         {/each}
       </select>
     </label>
-    <button data-testid="data-reload" onclick={reload} disabled={loading}>reload</button>
+    <button data-testid="data-reload" onclick={reload} disabled={loading || editBusy}>reload</button>
     {#if !atStart}
-      <button data-testid="data-first" onclick={first} disabled={loading}>&laquo; first page</button>
+      <button data-testid="data-first" onclick={first} disabled={loading || editBusy}
+        >&laquo; first page</button
+      >
     {/if}
     {#if canEdit}
       <button data-testid="data-new" onclick={startInsert} disabled={editBusy}>+ new row</button>
@@ -566,7 +590,7 @@
           {#each rows as row, i (i)}
             <tr>
               {#if canEdit}
-                {@const id = idFor(row)}
+                {@const id = idFor(row, i)}
                 <td class="acts">
                   {#if !id.ok}
                     <!-- No id, no editor: acting on a row this app cannot
@@ -633,7 +657,10 @@
 
   {#if keyset}
     <div class="pager">
-      <button data-testid="data-prev" onclick={prev} disabled={loading || prevCursor === null}
+      <button
+        data-testid="data-prev"
+        onclick={prev}
+        disabled={loading || editBusy || prevCursor === null}
         >&larr; prev</button
       >
       <!-- A traversal position, deliberately not a page index: with count=none
@@ -645,7 +672,10 @@
         title="Steps taken in this cursor walk. There is no row count, so this is not a page number - it says how far the walk has come, not how many rows lie before these."
         >step {pos.step} - {rows.length} rows</span
       >
-      <button data-testid="data-next" onclick={next} disabled={loading || nextCursor === null}
+      <button
+        data-testid="data-next"
+        onclick={next}
+        disabled={loading || editBusy || nextCursor === null}
         >next &rarr;</button
       >
     </div>

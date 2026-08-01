@@ -17,13 +17,21 @@
 //      length main refuses on the way back in, so the pane is never handed a
 //      hop that cannot be made.
 //
+// A mutation's reply is bounded by the same per-value rule (boundReturnedRow).
+// INSERT, UPDATE and DELETE all come back with every exposed column of the
+// affected row, so updating one short column of a row that also holds a large
+// `text` or `bytea` value would otherwise clone that value across both IPC hops
+// for a reply the renderer reads only the outcome of.
+//
 // Two things this deliberately does NOT claim:
 //
 //   1. It does not bound what the worker holds. The driver has already read the
 //      page into this process; the budget bounds what leaves it.
-//   2. It does not bound the `get` path. A single row is bounded by being one
-//      row, and an editor that only ever saw a cut value could write the cut
-//      back — so a full value stays reachable there. See DataResult.truncated.
+//   2. It does not bound the `get` path. That is the one place a full value is
+//      needed — an editor seeded from a cut value could write the cut back — and
+//      one row is the smallest unit this app ever reads. It is a scope
+//      statement, not a memory bound: a single value can be arbitrarily large,
+//      so opening an editor on a huge value costs what that value costs.
 //
 // Every cut is reported, never silent: a pane that shows a shortened value as
 // if it were the value would be making a claim the app cannot support. And a
@@ -158,4 +166,25 @@ export function boundListPage(body: unknown, budget: number = DATA_VALUE_BUDGET)
     }
   });
   return { cuts, droppedCursors: boundCursors(page) };
+}
+
+/** Apply the per-value budget to a mutation's returned row, mutating it in
+ *  place. Same rule as a page cell, reported the same way (as row 0, the only
+ *  row there is).
+ *
+ *  The change has already committed by the time this runs: this bounds the
+ *  REPLY, not the write. Nothing about what was stored is affected — a value
+ *  cut here was written in full and can be read in full through `get`. */
+export function boundReturnedRow(
+  body: unknown,
+  budget: number = DATA_VALUE_BUDGET,
+): DataTruncation[] {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return [];
+  const record = body as Record<string, unknown>;
+  const cuts: DataTruncation[] = [];
+  for (const column of Object.keys(record)) {
+    const cut = boundCell(record, column, budget);
+    if (cut !== undefined) cuts.push({ row: 0, column, ...cut });
+  }
+  return cuts;
 }

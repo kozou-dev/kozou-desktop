@@ -254,6 +254,62 @@ describe.skipIf(!url)('row data against a real database', () => {
     }
   });
 
+  it('hands every temporal type over as text, not as a JavaScript object', async () => {
+    // The other five OIDs the pool overrides. Each of them parses, by default,
+    // into something that does not convert back: a `timestamp` and a `time`
+    // become Dates built from the LOCAL clock, and an `interval` becomes an
+    // object with no textual form PostgreSQL accepts at all. Asserting the exact
+    // strings is what fails if any one of them is dropped from the override.
+    const page = await readRunner.run({ kind: 'list', resource: 'audit_log' });
+    expect(page.ok).toBe(true);
+    const [only] = rowsOf(page);
+    expect(typeof only?.at).toBe('string');
+    expect(only?.noted_at).toBe('2026-08-01 09:30:00');
+    expect(only?.shift_start).toBe('09:30:00');
+    expect(only?.span).toBe('1 day 02:00:00');
+  });
+
+  it('bounds the row a mutation returns, without bounding what was written', async () => {
+    // INSERT/UPDATE/DELETE come back with every exposed column of the affected
+    // row, so a one-column edit of a row that also holds a large value would
+    // otherwise clone that value across both IPC hops for a reply the UI reads
+    // only the outcome of.
+    const size = DATA_VALUE_BUDGET * 3;
+    const created = await writeRunner.run({
+      kind: 'insert',
+      resource: 'customers',
+      values: { name: 'x'.repeat(size), email: BULK_MARK },
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const id = String(row(created).id);
+    try {
+      expect((row(created).name as string).length).toBe(DATA_VALUE_BUDGET);
+      expect(created.truncated).toEqual([{ row: 0, column: 'name', kind: 'text', size }]);
+
+      // The reply was cut; the row was not. This is the half that keeps "we
+      // bound the reply" from quietly meaning "we wrote less than you gave us".
+      const stored = await pool.query<{ n: number }>(
+        'SELECT length(name)::int AS n FROM customers WHERE id = $1',
+        [id],
+      );
+      expect(stored.rows[0]!.n).toBe(size);
+
+      const updated = await writeRunner.run({
+        kind: 'update',
+        resource: 'customers',
+        id,
+        values: { birthday: '2026-08-02' },
+      });
+      expect(updated.ok).toBe(true);
+      if (!updated.ok) return;
+      expect((row(updated).name as string).length).toBe(DATA_VALUE_BUDGET);
+      expect(updated.truncated?.[0]?.column).toBe('name');
+    } finally {
+      await pool.query('DELETE FROM customers WHERE email = $1', [BULK_MARK]);
+    }
+  });
+
   it('refuses a mutation on a read runner and leaves the table unchanged', async () => {
     const before = await pool.query<{ n: string }>('SELECT count(*)::text AS n FROM customers');
     const result = await readRunner.run({

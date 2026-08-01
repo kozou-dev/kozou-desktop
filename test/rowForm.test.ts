@@ -97,12 +97,38 @@ describe('seedForm', () => {
     expect(find(fields, 'blob').text).toBe('');
   });
 
+  it('locks a structured value whose column would reject json syntax', () => {
+    // The driver parses `text[]` into a JavaScript array. Seeding it as JSON
+    // (`["a,b","c"]`) and saving would bind that spelling to an array column,
+    // which wants `{"a,b",c}` - a value the operator never asked to change.
+    const cols = [
+      column({ name: 'tags', dataType: 'text[]' }),
+      column({ name: 'loc', dataType: 'point' }),
+    ];
+    const { fields } = seedForm(cols, 'update', { tags: ['a,b', 'c'], loc: { x: 1, y: 2 } });
+    expect(find(fields, 'tags').lock).toBe('unrepresentable');
+    expect(find(fields, 'loc').lock).toBe('unrepresentable');
+  });
+
   it('flags a re-serialized json seed', () => {
     const cols = [column({ name: 'doc', dataType: 'jsonb' })];
     const { fields, anyReserialized } = seedForm(cols, 'update', { doc: { a: 1 } });
     expect(find(fields, 'doc').reserialized).toBe(true);
     expect(JSON.parse(find(fields, 'doc').text)).toEqual({ a: 1 });
     expect(anyReserialized).toBe(true);
+  });
+
+  it('seeds a json column in json syntax even when the driver produced a string', () => {
+    // A jsonb document `"123"` is a json STRING; the driver parses it into the
+    // JavaScript string `123`, which is indistinguishable from a text column's
+    // value. Seeding that verbatim and saving it would store the json NUMBER
+    // 123 - a type change nothing on screen shows.
+    const cols = [column({ name: 'doc', dataType: 'jsonb' })];
+    const { fields } = seedForm(cols, 'update', { doc: '123' });
+    expect(find(fields, 'doc').text).toBe('"123"');
+    expect(find(fields, 'doc').reserialized).toBe(true);
+    const sent = buildPayload(cols, type(fields, 'doc', '"123"'), 'update');
+    expect(sent).toEqual({ ok: true, values: { doc: '"123"' } });
   });
 });
 
@@ -148,20 +174,27 @@ describe('buildPayload', () => {
     expect(result).toEqual({ ok: true, values: { name: 'New', email: null } });
   });
 
-  it('names a NOT NULL column with no default rather than letting it become a 400', () => {
+  it('warns about a NOT NULL column with no default, but still sends', () => {
+    // Naming the column is more use than the database's own "Not-null
+    // constraint violation", which names nothing. Refusing would be this app
+    // overruling PostgreSQL about a column a trigger may well fill in.
     const seeded = seedForm(COLUMNS, 'insert').fields;
     const result = buildPayload(COLUMNS, type(seeded, 'email', 'a@b.test'), 'insert');
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain('name');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.warnings?.join(' ')).toContain('name');
+    expect(result.values).toEqual({ email: 'a@b.test' });
   });
 
-  it('does not require a value for a primary key with no default', () => {
+  it('does not warn about a primary key with no default', () => {
     // An identity key has no pg_attrdef entry, so it is indistinguishable from
-    // a key the client must supply — blocking the save would block the ordinary
-    // case to warn about the rare one.
+    // a key the client must supply. Warning on every ordinary insert would
+    // train the operator to ignore the line.
     const seeded = seedForm(COLUMNS, 'insert').fields;
     const result = buildPayload(COLUMNS, type(seeded, 'name', 'New'), 'insert');
     expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.warnings).toBeUndefined();
   });
 
   it('refuses to null a NOT NULL column', () => {
@@ -210,6 +243,19 @@ describe('rowId', () => {
 
   it('refuses a relation with no primary key', () => {
     expect(rowId([], { a: 1 })).toEqual({ ok: false, reason: 'no-primary-key' });
+  });
+
+  it('refuses a key the page budget shortened', () => {
+    // The browse budget cuts every oversized value it carries, keys included.
+    // The first 1,024 characters of one key can be another key in full, so an
+    // id built from a cut cell can address a different row - the one failure
+    // this whole derivation exists to prevent.
+    expect(rowId(['id'], { id: 'x'.repeat(1024) }, new Set(['id']))).toEqual({
+      ok: false,
+      reason: 'cut-value',
+    });
+    // A cut somewhere else in the row is not this row's problem.
+    expect(rowId(['id'], { id: '7', bio: 'cut' }, new Set(['bio']))).toEqual({ ok: true, id: '7' });
   });
 
   it('refuses a key value that is missing or not a scalar', () => {

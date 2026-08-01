@@ -26,11 +26,13 @@
 //      400 becomes a fixed sentence. A 400 is passed through: it is either a
 //      pre-flight/constraint message or a description of the input the user
 //      just typed.
-//   5. A browse page is bounded before it is serialized. Nothing in the request
+//   5. A reply is bounded before it is serialized. Nothing in the request
 //      grammar limits what a page weighs — 200 rows of large `text`/`jsonb`/
-//      `bytea` values is an ordinary schema away — so rowBudget.ts cuts
-//      oversized values here and every cut is reported (see rowBudget.ts for
-//      what this deliberately does not bound).
+//      `bytea` values is an ordinary schema away — and a mutation comes back
+//      with every column of the row it touched, so rowBudget.ts cuts oversized
+//      values in both, and every cut is reported. The single-row `get` is the
+//      one exception, and the one place a full value is needed (see
+//      rowBudget.ts for what this deliberately does not bound).
 //   6. Date, time and interval values are handed over as PostgreSQL's own text.
 //      The driver's parsers for that family are not round-trippable, and this
 //      is the path a row editor reads a value through before writing it back
@@ -54,7 +56,7 @@ import {
   type DataResult,
 } from '../shared/types.js';
 import { sanitizeErrorMessage } from '../shared/url.js';
-import { boundListPage } from './rowBudget.js';
+import { boundListPage, boundReturnedRow } from './rowBudget.js';
 import { runInspect } from './runInspect.js';
 
 const LOG_PREFIX = DATA_LOG_PREFIX;
@@ -79,8 +81,8 @@ const POOL_MAX = 2;
  *  network path hangs an operation with nothing to cut it short. */
 const CONNECT_TIMEOUT_MS = 10_000;
 
-/** Date/time (and interval) type OIDs, with their array forms, handed over as
- *  PostgreSQL's own text rather than as JavaScript objects.
+/** SCALAR date/time/interval type OIDs, handed over as PostgreSQL's own text
+ *  rather than as JavaScript objects.
  *
  *  The driver's default parsers are not round-trippable for this family, and a
  *  row editor writes values back. A `date` is parsed into a Date at LOCAL
@@ -94,14 +96,20 @@ const CONNECT_TIMEOUT_MS = 10_000;
  *  Keeping the text avoids every one of those: it is exactly what the server
  *  said, it renders as itself, and it is valid input for the same column. The
  *  override is scoped to this pool, so introspection — which runs in this same
- *  process — keeps the driver's defaults. */
+ *  process — keeps the driver's defaults.
+ *
+ *  Deliberately scalars only. The array forms have the same weakness, but
+ *  overriding them would change a browse cell from a JavaScript array into an
+ *  array literal for every temporal array column — a wider behaviour change than
+ *  this is pinned for. An array arrives parsed, the editor cannot write it back
+ *  faithfully, and it says so by locking the field (see lib/rowForm.ts). */
 const TEXTUAL_OIDS = new Set([
-  1082, 1182, // date, date[]
-  1083, 1183, // time, time[]
-  1114, 1115, // timestamp, timestamp[]
-  1184, 1185, // timestamptz, timestamptz[]
-  1266, 1270, // timetz, timetz[]
-  1186, 1187, // interval, interval[]
+  1082, // date
+  1083, // time
+  1114, // timestamp
+  1184, // timestamptz
+  1266, // timetz
+  1186, // interval
 ]);
 
 const asIs = (value: string): string => value;
@@ -308,19 +316,26 @@ function toResult(result: ApiHttpResult): DataResult {
     : { ok: false, status: result.status, code: 'failed', message: GENERIC_FAILURE };
 }
 
-/** Bring a browse page within what the wire allows — the per-value budget for
- *  the cells, and the control-string limit for the cursors — and report what was
- *  withheld. Applied to `list` only: a `get` fetches one row and hands its
- *  values over in full, because an editor working from a cut value could write
- *  the cut back.
+/** Bring a reply within what the wire allows, and report what was withheld.
  *
- *  That exclusion is belt-and-braces today — a `get` body is a bare row, which
- *  boundListPage does not touch either — and it is kept for the day the wire
- *  shape of a single row changes upstream. Being redundant, removing it alone is
- *  not observable in a test; test/rowBudget.test.ts says so rather than leaving
- *  the impression that it is covered. */
+ *  Three shapes, three rules:
+ *
+ *    * `list` — the per-value budget for every cell, and the control-string
+ *      limit for the cursors;
+ *    * `insert`/`update`/`delete` — the same per-value budget over the row the
+ *      statement returned. @kozou/api returns every exposed column of the
+ *      affected row, so a one-column edit of a row that also holds a large
+ *      value would otherwise carry that value across both IPC hops for a reply
+ *      whose only load-bearing part is the outcome and the key. The write has
+ *      already committed: this bounds what comes back, never what was stored;
+ *    * `get` — untouched. It is the path an editor reads through, and an editor
+ *      seeded from a cut value could write the cut back. */
 function boundForWire(op: DataOperation, result: DataResult): DataResult {
-  if (!result.ok || op.kind !== 'list') return result;
+  if (!result.ok || op.kind === 'get') return result;
+  if (op.kind !== 'list') {
+    const cuts = boundReturnedRow(result.body);
+    return cuts.length === 0 ? result : { ...result, truncated: cuts };
+  }
   // boundListPage cuts the rows and clears the oversized cursors in place, so
   // `body` is already within the limits here; what is added is the report.
   const { cuts, droppedCursors } = boundListPage(result.body);

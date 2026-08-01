@@ -21,8 +21,8 @@
 //   4. A row is addressed by its primary key, or not at all. The id is what
 //      @kozou/api's item routes parse, and a key it cannot express (a composite
 //      component containing the separator, a value that did not arrive as a
-//      scalar) yields no id — so the row offers no editor rather than an editor
-//      that would act on a different row.
+//      scalar, a key the browse budget had to shorten) yields no id — so the row
+//      offers no editor rather than an editor that would act on a different row.
 
 import type { ColumnView } from '../../../shared/contextView.js';
 
@@ -82,46 +82,54 @@ export function fieldLock(
   return undefined;
 }
 
-/** A value this app cannot hand back to the database in the form it arrived in.
- *  Byte arrays are the real case: a browse cell shows a length, not the bytes,
- *  and there is no text the operator could edit that would round-trip. */
-function unrepresentable(value: unknown): boolean {
-  return (
-    value instanceof Uint8Array ||
-    ArrayBuffer.isView(value) ||
-    typeof value === 'function' ||
-    typeof value === 'symbol'
-  );
+/** Whether a column holds a json document. The distinction is load-bearing on
+ *  BOTH sides: the driver parses json, so what arrives is a JavaScript value
+ *  with no memory of the syntax it came from, and the text sent back is parsed
+ *  as json again. */
+function isJsonColumn(column: ColumnView): boolean {
+  return column.dataType.toLowerCase().startsWith('json');
 }
 
-/** Render a fetched value as editable text.
+/** Render a fetched value as editable text — as the COLUMN's syntax, not as
+ *  whatever JavaScript the driver happened to produce.
  *
- *  Dates and intervals do not appear here as objects: the data worker hands
- *  that family over as PostgreSQL's own text precisely so this function does not
- *  have to invent a textual form for them (see runData.ts). What is left that is
- *  not already text is a json/jsonb document, which is re-serialized — flagged,
- *  because the result is equal as JSON but not necessarily identical as text. */
-function seedText(value: unknown): { text: string; reserialized: boolean } | null {
+ *  Reading a value's JavaScript type is not enough to know how to write it back,
+ *  and getting that wrong changes data silently rather than loudly:
+ *
+ *    * a json column holding the document `"123"` (a json STRING) is parsed into
+ *      the JavaScript string `123`. Treating that as text-to-send-verbatim would
+ *      store the json NUMBER 123 — a type change nothing on screen shows. Every
+ *      json value is therefore re-serialized, so what is edited is json syntax
+ *      and what is sent is parsed as json;
+ *    * a `text[]`, a `point` or any other structured type is parsed into an
+ *      array or object too, but its column would reject json syntax (a text
+ *      array wants `{a,b}`, not `["a","b"]`). There is no textual form of it
+ *      this app can produce faithfully, so the field is locked instead — the
+ *      value is shown by the browse pane and left alone by the editor.
+ *
+ *  Date and interval objects do not reach here from the types the worker keeps
+ *  as text (see runData.ts); one arriving from any other type is structured
+ *  data by this rule and is locked for the same reason. */
+function seedText(
+  column: ColumnView,
+  value: unknown,
+): { text: string; reserialized: boolean } | null {
+  if (isJsonColumn(column)) {
+    try {
+      const json = JSON.stringify(value, null, 2);
+      // `undefined` only comes back for values JSON has no form for, which the
+      // driver does not produce from a json column.
+      return json === undefined ? null : { text: json, reserialized: true };
+    } catch {
+      // Cyclic, or a bigint nested inside: no text to offer.
+      return null;
+    }
+  }
   if (typeof value === 'string') return { text: value, reserialized: false };
   if (typeof value === 'number' || typeof value === 'bigint' || typeof value === 'boolean') {
     return { text: String(value), reserialized: false };
   }
-  // A Date can still arrive from a column type outside the family the worker
-  // overrides. Its ISO form is the honest reading of an instant; flagged as
-  // re-serialized because it is this app's rendering, not the server's text.
-  if (value instanceof Date) {
-    return Number.isNaN(value.getTime())
-      ? null
-      : { text: value.toISOString(), reserialized: true };
-  }
-  if (unrepresentable(value)) return null;
-  try {
-    const json = JSON.stringify(value, null, 2);
-    return json === undefined ? null : { text: json, reserialized: true };
-  } catch {
-    // Cyclic, or a bigint nested inside an object: no text to offer.
-    return null;
-  }
+  return null;
 }
 
 /** Build the initial field states for a form.
@@ -146,9 +154,14 @@ export function seedForm(
     };
     if (mode === 'insert' || row === undefined) return base;
     const value = row[column.name];
+    // A json column holding the document `null` also arrives as JavaScript
+    // null, so this state cannot be told apart from SQL NULL — the driver
+    // parsed away the difference. The control says NULL, and nothing is sent
+    // unless the operator answers for the field, so the ambiguity is never
+    // resolved on their behalf.
     if (value === null) return { ...base, isNull: true };
     if (value === undefined) return base;
-    const seeded = seedText(value);
+    const seeded = seedText(column, value);
     if (seeded === null) {
       // The value is here, but not as anything this form can put in a control.
       // Locking the field is what keeps an untouched byte array from being
@@ -168,16 +181,30 @@ export function seedForm(
 }
 
 export type PayloadResult =
-  | { ok: true; values: Record<string, unknown> }
+  | {
+      ok: true;
+      values: Record<string, unknown>;
+      /** Things worth saying before the database says them — never a reason to
+       *  refuse. See the NOT NULL note below. */
+      warnings?: string[];
+    }
   | { ok: false; error: string };
 
 /** Turn the form state into the payload for an insert or an update — or into
  *  the reason it is not ready to send.
  *
- *  The checks here are the two the database cannot phrase better than the form
- *  can: a NOT NULL column that would arrive empty, and a payload with nothing
- *  in it. Everything else (types, ranges, constraints, permissions) is left to
- *  the pre-flight and to PostgreSQL, which is where the real answer lives. */
+ *  Only two things are refused here, and both are refusals about the FORM
+ *  rather than about the data: a null answered for a NOT NULL column (the
+ *  control offered a state the column does not have), and a payload with
+ *  nothing in it (there is no request to make). Everything else — types,
+ *  ranges, constraints, permissions — is left to the pre-flight and to
+ *  PostgreSQL, which is where the real answer lives.
+ *
+ *  A NOT NULL column with no DEFAULT left empty is a WARNING, not a refusal.
+ *  Naming it is useful; refusing on it would be this app overruling the
+ *  database, which cannot see what a BEFORE INSERT trigger or a domain default
+ *  will supply — and a schema like that would be permanently un-insertable from
+ *  here. */
 export function buildPayload(
   columns: ColumnView[],
   fields: FieldState[],
@@ -192,17 +219,18 @@ export function buildPayload(
     const column = byName.get(field.column);
     if (column === undefined || field.lock !== undefined) continue;
     if (!field.touched) {
-      // An insert that leaves a NOT NULL column with no default unset reaches
-      // PostgreSQL as a 23502, which comes back as "Not-null constraint
-      // violation" without naming the column. Naming it here is the whole value
-      // of this check.
+      // An insert that leaves a NOT NULL column with no default unset usually
+      // reaches PostgreSQL as a 23502, which comes back as "Not-null constraint
+      // violation" without naming the column. Naming it up front is the whole
+      // value of this — and it stays a warning, because "usually" is as far as
+      // this app can see: a trigger or a domain default may well supply it.
       //
-      // Primary keys are exempt, and the reason is a gap in what introspection
-      // reports: an identity column (`GENERATED ALWAYS AS IDENTITY`, the
-      // ordinary way to key a table) has no entry in `pg_attrdef`, so it is
-      // indistinguishable here from a key the client must supply. Refusing to
-      // save would then block the common case to warn about the rare one. A key
-      // that really was required still gets the database's own 400.
+      // Primary keys are left out of even the warning, because introspection
+      // cannot tell the two cases apart: an identity column (`GENERATED ALWAYS
+      // AS IDENTITY`, the ordinary way to key a table) has no `pg_attrdef`
+      // entry, so it looks exactly like a natural key the client must supply.
+      // Warning on every insert into an ordinary table would train the operator
+      // to ignore the line.
       if (
         mode === 'insert' &&
         !column.nullable &&
@@ -227,12 +255,6 @@ export function buildPayload(
       error: `These columns cannot be null: ${nulled.join(', ')}.`,
     };
   }
-  if (missing.length > 0) {
-    return {
-      ok: false,
-      error: `These columns have no default and cannot be empty: ${missing.join(', ')}.`,
-    };
-  }
   if (Object.keys(values).length === 0) {
     return {
       ok: false,
@@ -242,7 +264,14 @@ export function buildPayload(
           : 'Nothing was changed.',
     };
   }
-  return { ok: true, values };
+  const warnings =
+    missing.length > 0
+      ? [
+          `Left empty, with no default of their own: ${missing.join(', ')}. ` +
+            'The database will refuse this unless a trigger or a domain default supplies them.',
+        ]
+      : [];
+  return { ok: true, values, ...(warnings.length > 0 ? { warnings } : {}) };
 }
 
 /** Why a row cannot be addressed, in the words the row's controls will use. */
@@ -250,7 +279,8 @@ export type RowIdFailure =
   | 'no-primary-key'
   | 'missing-value'
   | 'unrepresentable-value'
-  | 'separator-in-value';
+  | 'separator-in-value'
+  | 'cut-value';
 
 export type RowIdResult = { ok: true; id: string } | { ok: false; reason: RowIdFailure };
 
@@ -258,16 +288,25 @@ export type RowIdResult = { ok: true; id: string } | { ok: false; reason: RowIdF
  *  primary key, taken verbatim, and the components joined with commas for a
  *  composite one.
  *
- *  A composite key value containing a comma has no representation in that
- *  grammar — the id is split on commas after decoding — so it is refused here
- *  rather than sent to address whatever row the mis-split happens to name. */
+ *  Two ways a key on screen is not a key that can be sent:
+ *
+ *    * a composite component containing a comma has no representation in that
+ *      grammar — the id is split on commas after decoding — so it is refused
+ *      here rather than sent to address whatever row the mis-split names;
+ *    * a key the browse budget shortened is a DIFFERENT key. The page bounds
+ *      every oversized value it carries, keys included, so a 1,025-character
+ *      text key arrives as its first 1,024 characters — which may well be
+ *      another row's key in full. `cutColumns` names the columns that happened
+ *      to, and any of them in the key is fatal to addressing this row. */
 export function rowId(
   primaryKey: string[],
   row: Record<string, unknown>,
+  cutColumns?: ReadonlySet<string>,
 ): RowIdResult {
   if (primaryKey.length === 0) return { ok: false, reason: 'no-primary-key' };
   const parts: string[] = [];
   for (const column of primaryKey) {
+    if (cutColumns?.has(column) === true) return { ok: false, reason: 'cut-value' };
     const value = row[column];
     if (value === null || value === undefined) return { ok: false, reason: 'missing-value' };
     if (typeof value === 'string') parts.push(value);
@@ -292,6 +331,8 @@ export const ROW_ID_EXPLANATION: Record<RowIdFailure, string> = {
     'This row is keyed by a value this app cannot put in a request, so it cannot be addressed.',
   'separator-in-value':
     'A component of this composite key contains a comma, which the item address separates on - this row cannot be addressed unambiguously.',
+  'cut-value':
+    'This row\'s key was too large to carry in full, so what is shown is only its beginning - which could belong to another row. Editing it from here is not possible.',
 };
 
 /** Which control a column gets. Derived from kozou's own widget choice where it
