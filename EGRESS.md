@@ -87,6 +87,39 @@ App lifetime bounds MCP lifetime — verified empirically on the built app:
   tears utility processes down with the browser process) — no orphan
   listener remained.
 
+### Real-client verification (2026-08-02, macOS)
+
+What the automated suites already establish, so this record is not read as more
+than it adds: `test/mcpServer.integration.test.ts` performs a **real MCP client
+handshake** in CI — the official SDK client over Streamable HTTP against a live
+database, asserting the tool list is exactly the eight describe tools, calling
+one of them, and forcing the execution tool to be refused. The e2e suite covers
+the lifecycle (start, restore, stop, quit) and checks that the listener answers
+and that the default path 404s. Both drive the server module directly.
+
+What this record adds is the rest of the path: a **third-party AI client**, the
+**built app** rather than the module, and the **config the app itself hands
+you**. Claude Code CLI (2.1.209) was pointed at a started profile's capability
+URL using the command the card's **AI client config** panel produced, against
+`electron-vite build` output (as `pnpm start` runs) and a live database:
+
+- the client reported the server **connected**;
+- `tools/list` returned the eight describe tools and nothing else — no
+  execution tool;
+- `list_tables`, `describe_table` and `search_schema` came back with compiled
+  semantics (COMMENTs and `@ai` notes), so the served surface is the same model
+  the app draws;
+- quitting the app closed the listener, as in the process-lifetime check above.
+
+Pasting the same server into a project `.mcp.json` leaves Claude Code awaiting
+an in-session approval before it connects — a client-side gate, not a server
+behaviour, noted here because it looks like a connection failure.
+
+**Scope**: one client. The panel also offers configurations for Cursor and for
+Claude Desktop (as a custom connector), and their shapes are unit-tested, but
+no real-client run is recorded for either. Nothing here says those two were
+verified.
+
 Known Electron caveats handled: the built-in spellchecker downloads
 dictionaries from an external CDN on Windows/Linux when enabled (item 5);
 `autoUpdater`/`crashReporter` are opt-in and stay unused (items 1–2); on
