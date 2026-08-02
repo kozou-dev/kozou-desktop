@@ -1,7 +1,7 @@
 # Trying kozou Desktop — what feedback helps
 
 Thanks for trialing the semantic map. It is an early, experimental build
-(`v0.1.0-alpha.1`), and we are trying to learn one thing: **does seeing your
+(`v0.3.0-alpha.1`), and we are trying to learn one thing: **does seeing your
 database's compiled semantics — comments, `@ai`/`@policy` notes, views, and
 relationships — as a visual map actually help you in real work?**
 
@@ -54,6 +54,12 @@ Open-ended — a sentence each is plenty:
   annotation, or view didn't appear where you expected. (Foreign keys to
   schemas you didn't add to the profile are intentionally hidden; views that
   read from outside those schemas show as dashed "ghost" nodes.)
+- The **local MCP hub** (header control → **Local**, then **start** on a card,
+  then **AI client config**) serves the same describe surface to your own AI
+  client, one server per profile — see the README for the steps. If you connect
+  it: did having every database you added reachable from one place beat running
+  a server per database yourself, and did anything about pasting the config or
+  keeping the app open get in the way?
 - The **AI view** tab shows the payload an AI agent receives from the MCP
   describe tools of a *default-configured* kozou server (server-side opt-ins
   like RPC exposure config or privilege-aware annotations are not reproduced

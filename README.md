@@ -1,6 +1,6 @@
 # kozou Desktop
 
-**Status: experimental — validation-first MVP (M2: semantic map). Not released; no builds are distributed yet.**
+**Status: experimental — validation-first MVP, past its first external trial. Pre-releases (`v0.3.0-alpha.1`) are run from source; no binaries are distributed.**
 
 A desktop app that renders the **semantic model** [kozou](https://kozou.org) compiles from your PostgreSQL schema — table/column COMMENTs with `@ai`/`@policy` tags, views and their lineage, foreign-key relationships and their documented meaning — as a human-facing visual map, across multiple databases. It is **read-only by default**: row browsing and row editing are per-profile opt-ins, and the introspection and MCP surfaces stay read-only whether or not you enable them. (A profile card shows its row-access level and offers each opt-in separately — browsing first, editing as its own approval — and a **Data** tab then appears on the detail pane.) Comments can be **edited into `COMMENT ON` statements the app hands back to you** — it applies none of them, so that path needs no grant and reaches no database.
 
@@ -52,6 +52,85 @@ may change.
 
 If you are trying this at our request, see [TRIAL.md](TRIAL.md) for what
 feedback is most useful.
+
+## Serve it to an AI client (local MCP hub, off by default)
+
+The app can also serve the same compiled semantics to AI clients on your
+machine, so you and an agent read one model instead of two. It is **off by
+default**, and read-only regardless of anything else you have opted into.
+
+1. Set the **MCP** control in the header to **Local**.
+2. On a profile card, click **start** — the badge becomes `MCP on :<port>`.
+3. Click **AI client config** and copy the form your client wants — the panel
+   offers three.
+
+`mcpServers` JSON, for Cursor:
+
+```json
+{
+  "mcpServers": {
+    "kozou-local-<profile>": {
+      "type": "http",
+      "url": "http://127.0.0.1:3335/mcp-<random>"
+    }
+  }
+}
+```
+
+a one-liner, for Claude Code:
+
+```sh
+claude mcp add --transport http kozou-local-<profile> http://127.0.0.1:3335/mcp-<random>
+```
+
+and the bare URL, for Claude Desktop, which takes it as a custom connector
+rather than from a config file:
+
+```text
+http://127.0.0.1:3335/mcp-<random>
+```
+
+One server per profile, so several databases can be served at once — each
+under its own name, port and path. Which is the point: an agent gets every
+database you have added, from one place, without a server per database.
+
+What it serves is the **describe surface only**: `list_tables`,
+`describe_table`, `list_views`, `describe_view`, `list_concepts`,
+`get_concept_context`, `describe_functions`, `search_schema`. There is no
+execution tool — it is neither advertised nor dispatchable, and a forced call
+is refused (pinned by an integration test against a real database). Row data
+never reaches this surface, whatever a profile's row-access grant says.
+
+Worth knowing before you paste:
+
+- **The app bounds the listener's lifetime.** Quitting closes the port. A
+  profile you started comes back on the next launch until you press **stop** —
+  with one exception: a profile you started over the duplicate-declaration
+  warning is left at `MCP blocked (duplicate)` at launch instead, because
+  restoring one would mean re-asking, and the app raises no dialogs while
+  starting up. An edit that repoints a profile at a different URL or different
+  schemas stops its server rather than serving the old database under the same
+  name (the badge says so; restarting it is a deliberate click).
+- **The port is sticky** — assigned once from 3335 upward (3334 is skipped: it
+  is the kozou CLI's own default) and never silently renumbered, because the
+  configs you pasted name it. A bind conflict is reported as `MCP port busy`
+  with a **move port** control instead of being resolved behind your back, and
+  while that lasts the card stops offering to open the config panel (a panel
+  you already had open keeps showing the snippet, and says the server is not
+  running).
+- **The path is a capability, not authentication.** Any process on your machine
+  that can read your AI client's config files can read schema *metadata*
+  through it — never row data. Moving the port keeps the same path, so a config
+  you pasted stays valid for the profile it named. See [EGRESS.md](EGRESS.md)
+  item 10 for the exact local exposure.
+- **Claude Code, project scope**: a server pasted into a project `.mcp.json`
+  sits at `Pending approval` until you approve it once inside `claude`. The
+  copied command adds no `--scope`, so it lands in whatever scope your CLI
+  defaults to — local at the time of writing, which connects immediately.
+- **Remote only** (the third mode) serves nothing locally. It exists for
+  databases already covered by a remote kozou server, which a profile can
+  *declare* — and that declaration is what makes the app warn you before
+  serving a duplicate of one.
 
 ## Local unsigned build
 
