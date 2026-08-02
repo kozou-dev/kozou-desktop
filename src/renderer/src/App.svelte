@@ -499,7 +499,7 @@
       </div>
       <pre data-testid="mcp-snippet-command">{snippet.claudeCodeCommand}</pre>
       <div class="snippet-row">
-        <span>Claude Desktop (add as a custom connector - paste this URL)</span>
+        <span>Server URL (for a client that takes a URL directly)</span>
         <button onclick={() => snippet !== null && copyText(snippet.httpUrl)}>copy</button>
       </div>
       <pre data-testid="mcp-snippet-url">{snippet.httpUrl}</pre>
@@ -507,6 +507,12 @@
         The URL embeds this profile's secret path - treat the pasted config like a
         credential-adjacent file. The server listens on 127.0.0.1 only and serves read-only
         describe tools.
+      </p>
+      <p class="form-hint">
+        Claude Desktop cannot reach this server: its custom connectors are opened from
+        Anthropic's cloud and need a publicly reachable https address, and its own config
+        file launches local commands rather than connecting to a URL. Reaching it from
+        there needs a local stdio bridge, which this app does not provide.
       </p>
     </section>
   {/if}

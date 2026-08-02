@@ -83,12 +83,19 @@ a one-liner, for Claude Code:
 claude mcp add --transport http kozou-local-<profile> http://127.0.0.1:3335/mcp-<random>
 ```
 
-and the bare URL, for Claude Desktop, which takes it as a custom connector
-rather than from a config file:
+and the bare URL, for any client that takes one directly:
 
 ```text
 http://127.0.0.1:3335/mcp-<random>
 ```
+
+**Claude Desktop cannot reach this server.** Its custom connectors are opened
+from Anthropic's cloud rather than from your machine and require a publicly
+reachable `https` address, so `127.0.0.1` is not something they can resolve to
+your Mac — adding TLS would not help, and exposing the hub publicly is the
+opposite of what it is for. Its own configuration file launches local commands
+(stdio) rather than connecting to a URL. Reaching the hub from there needs a
+local stdio-to-HTTP bridge process; this build neither provides nor tests one.
 
 One server per profile, so several databases can be served at once — each
 under its own name, port and path. Which is the point: an agent gets every

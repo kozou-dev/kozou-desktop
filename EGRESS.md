@@ -115,10 +115,20 @@ Pasting the same server into a project `.mcp.json` leaves Claude Code awaiting
 an in-session approval before it connects — a client-side gate, not a server
 behaviour, noted here because it looks like a connection failure.
 
-**Scope**: one client. The panel also offers configurations for Cursor and for
-Claude Desktop (as a custom connector), and their shapes are unit-tested, but
-no real-client run is recorded for either. Nothing here says those two were
-verified.
+**Scope**: one client connected. Cursor's `mcpServers` form has a unit-tested
+shape and no real-client run — nothing here says it was verified.
+
+**Claude Desktop: attempted and refused (2026-08-02).** Pasting the URL as a
+custom connector is rejected before any request is made — "URL must start with
+https". That is the outer gate, not the reason: a custom connector is opened
+from Anthropic's cloud rather than from the user's machine and must be reachable
+over the public internet, so `127.0.0.1` cannot resolve to the user's Mac
+whatever the scheme. TLS on the listener would not change that, and making the
+hub publicly reachable would contradict this whole document. Claude Desktop's
+own configuration file launches local commands (stdio) instead of connecting to
+a URL, so it has no second route either. A local stdio-to-HTTP bridge process is
+the known workaround and is not provided or tested here. Recorded as a negative
+result rather than a gap: the app no longer offers that path.
 
 Known Electron caveats handled: the built-in spellchecker downloads
 dictionaries from an external CDN on Windows/Linux when enabled (item 5);
