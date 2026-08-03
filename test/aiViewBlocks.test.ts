@@ -51,12 +51,17 @@ describe('relationAiBlocks', () => {
     const blocks = relationAiBlocks('view', 'public.recent_orders', aiViews, 'recent_orders');
 
     for (const block of blocks) {
-      // The identity that matters: the text IS a tool result, not a document
-      // built from one. A separator, a heading, or a joined second payload
-      // would each break this.
+      // The identity that matters: the text IS a tool result's text, not a
+      // document built from one. A separator, a heading, or a joined second
+      // payload would each break this.
+      //
+      // Deliberately the only assertion here. Checking instead that the text
+      // lacks "//" or "get_concept_context" would test a substring rather
+      // than provenance, and would fail on a legitimate payload: a view's
+      // `definition` and `aiDescription` are author-written text, so
+      // `@ai: call get_concept_context first` is a byte-identical payload
+      // that such a guard would reject.
       expect(PAYLOADS).toContain(block.text);
-      expect(block.text).not.toContain('//');
-      expect(block.text).not.toContain('get_concept_context');
     }
   });
 
@@ -86,16 +91,29 @@ describe('functionsAiBlocks', () => {
 });
 
 describe('AI_VIEW_NOTE', () => {
-  // Both surfaces render this string, so it has to carry both claims. Losing
-  // the second one is how the functions panel came to show an AI view with no
-  // fidelity boundary stated on it at all.
-  it('states that a block is a whole tool result and that the heading is not payload', () => {
-    expect(AI_VIEW_NOTE).toContain('one whole MCP tool result');
+  // Both surfaces render this string, so it has to carry every claim. Losing
+  // the configuration boundary is how the functions panel came to show an AI
+  // view with no fidelity statement on it at all.
+  it('states what a block is, and that the heading is not payload', () => {
+    expect(AI_VIEW_NOTE).toContain('the text of one MCP tool result');
     expect(AI_VIEW_NOTE).toContain('not part of the payload');
+  });
+
+  it('states that adjacent blocks are not a transcript', () => {
+    expect(AI_VIEW_NOTE).toContain('separately');
+    expect(AI_VIEW_NOTE).toContain('not a transcript');
   });
 
   it('states the configuration boundary', () => {
     expect(AI_VIEW_NOTE).toContain('default-configured');
     expect(AI_VIEW_NOTE).toContain('not reproduced here yet');
+  });
+
+  it('does not overstate what is displayed', () => {
+    // The worker keeps `content[0].text`; the envelope and `isError` are
+    // dropped. Claiming the whole result, or byte identity of it, would be
+    // false about what the block holds.
+    expect(AI_VIEW_NOTE).not.toContain('byte-for-byte');
+    expect(AI_VIEW_NOTE).not.toContain('whole MCP tool result');
   });
 });

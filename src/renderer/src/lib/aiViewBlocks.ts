@@ -18,16 +18,33 @@ import type { AiViews } from '../../../shared/types.js';
  *  `successResult` produced; `call` is this app's label for it. */
 export type AiViewBlock = { call: string; text: string };
 
-/** Stated wherever an AI view surfaces. Two claims, both load-bearing: what
- *  the blocks are (whole tool results, with the heading outside the payload),
- *  and where this stops matching a real server (configuration-dependent
- *  surfaces are not reproduced). */
+/** Stated wherever an AI view surfaces. Three claims, each load-bearing and
+ *  each kept to what is actually true:
+ *
+ *    * what a block is — the *text* of one tool result. Not "the whole
+ *      result": the worker keeps `content[0].text` and drops the envelope
+ *      (`content`, `{type:"text"}`, `isError`), so claiming the result itself
+ *      would overstate what is on screen;
+ *    * that the heading is chrome, not payload;
+ *    * that showing two blocks together is a reading convenience — an agent
+ *      calls these separately and may call one, or both in the other order,
+ *      or in different turns. Adjacency here is not a transcript;
+ *    * where this stops matching a real server (configuration-dependent
+ *      surfaces are not reproduced).
+ *
+ *  Not claimed here, deliberately: that a currently running MCP server would
+ *  return this *now*. These come from the last inspect, and a running server
+ *  re-reads the database on its own schedule (worker/runMcpServer.ts builds
+ *  its own SchemaCache), so the honest claim is about the same schema, not
+ *  about a live session. */
 export const AI_VIEW_NOTE =
-  'Each block below is one whole MCP tool result - byte-for-byte what a ' +
-  'default-configured kozou server hands an AI agent, from the same functions ' +
-  'and the same serialization. The heading above a block is the call that ' +
-  'produced it and is not part of the payload. Server-side opt-ins (RPC ' +
-  'exposure config, privilege-aware annotations) are not reproduced here yet.';
+  'Each block below is the text of one MCP tool result - the same string a ' +
+  'default-configured kozou server produces for that call, from the same ' +
+  'functions and the same serialization. The heading above a block names the ' +
+  'call and is not part of the payload. An agent makes these calls separately, ' +
+  'so blocks shown together are a reading convenience, not a transcript. ' +
+  'Server-side opt-ins (RPC exposure config, privilege-aware annotations) are ' +
+  'not reproduced here yet.';
 
 function label(tool: string, args: Record<string, string>): string {
   return `${tool} ${JSON.stringify(args)}`;
