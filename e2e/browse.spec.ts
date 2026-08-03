@@ -137,6 +137,13 @@ test('data tab: gated by the grant, browses rows, and pages by cursor', async ()
     const badge = page.getByTestId('rowaccess-badge-browse');
     await expect(badge).toHaveText('rows: off');
 
+    // The ladder has to be readable BEFORE its first step: an operator who
+    // cannot see that editing is a second approval learns it only by having
+    // already granted browsing.
+    const raNote = page.getByTestId('rowaccess-note-browse');
+    await expect(raNote).toContainText('second, separate approval');
+    await expect(raNote).toContainText('no row queries yet');
+
     await page.getByTestId('map-node-public.customers').click({ timeout: 30_000 });
     await expect(page.getByTestId('detail-pane')).toContainText('public.customers');
     await expect(page.getByTestId('tab-data')).toHaveCount(0);
@@ -160,6 +167,9 @@ test('data tab: gated by the grant, browses rows, and pages by cursor', async ()
     await page.getByTestId('rowaccess-enable-browse').click();
     await expect(badge).toHaveText('rows: browsing');
     await expect.poll(() => prompts(app)).toBe(2);
+    // A grant that says nothing about where the rows are leaves the operator
+    // with permission and nowhere to use it.
+    await expect(raNote).toContainText('Data tab');
 
     await page.getByTestId('tab-data').click();
     const grid = page.getByTestId('data-grid');

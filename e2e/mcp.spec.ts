@@ -83,9 +83,24 @@ test('local MCP lifecycle: default off, start, quit closes the port, restore, st
   // --- first launch: default off, explicit enable + start -------------------
   const first = await launch(userData);
   await expect(first.page.getByTestId('mcp-mode')).toHaveValue('off');
+  // The control names who serves, and the options do too — the setting's own
+  // values ('off' / 'remote-only') are not what an operator is asking.
+  await expect(first.page.getByTestId('mcp-mode')).toContainText('Nobody (off)');
+  await expect(first.page.getByTestId('mcp-mode')).toContainText('This app (local)');
+  await expect(first.page.getByTestId('mcp-mode')).toContainText('Remote servers only');
   await addProfile(first.page, 'alpha');
   // Off mode renders no MCP controls on the card.
   await expect(first.page.getByTestId('mcp-alpha')).toHaveCount(0);
+
+  // 'off' and 'remote servers only' used to be indistinguishable on the card:
+  // no behaviour branches on 'remote-only', and neither mode said anything for
+  // an undeclared profile. Under 'off' the app claims nothing; under 'remote
+  // servers only' the absence of a declaration is itself stated.
+  await expect(first.page.getByTestId('serving-alpha')).toHaveCount(0);
+  await first.page.getByTestId('mcp-mode').selectOption('remote-only');
+  await expect(first.page.getByTestId('serving-alpha')).toHaveText('no serving server declared');
+  await first.page.getByTestId('mcp-mode').selectOption('off');
+  await expect(first.page.getByTestId('serving-alpha')).toHaveCount(0);
 
   await first.page.getByTestId('mcp-mode').selectOption('local');
   await expect(first.page.getByTestId('mcp-badge-alpha')).toHaveText('MCP off');
@@ -152,6 +167,9 @@ test('duplicate warning: declared remote MCP on the same database blocks, overri
   await addProfile(page, 'declared', { remoteDeclared: true });
   await addProfile(page, 'target');
   await page.getByTestId('mcp-mode').selectOption('local');
+  // A declaration is the operator's statement; the app never contacted that
+  // server, so the badge must not read as a verified fact.
+  await expect(page.getByTestId('mcp-declared')).toContainText('served remotely (declared)');
 
   await page.getByTestId('mcp-start-target').click();
   await expect(page.getByTestId('mcp-dup-target')).toBeVisible({ timeout: 15_000 });

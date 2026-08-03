@@ -9,6 +9,7 @@
   } from '../../shared/types';
   import { displayConnection } from '../../shared/url';
   import { computeCoverage } from './lib/coverage';
+  import { REMOTE_DECLARED, rowAccessNote, servingNote } from './lib/statusCopy';
 
   let {
     profiles,
@@ -198,6 +199,10 @@
           >
         {/if}
       </div>
+      <!-- Stated at every level, 'off' included: the second approval and the
+           place rows appear are both things an operator otherwise discovers
+           only after granting. -->
+      <div class="row ra-note" data-testid={`rowaccess-note-${p.name}`}>{rowAccessNote(p.rowAccess)}</div>
       {#if mcpMode === 'local'}
         {@const st = mcp[p.name]}
         {@const badge = mcpBadge(st)}
@@ -247,7 +252,7 @@
             >
           {/if}
           {#if p.remoteMcp?.declared}
-            <span class="mcp-badge remote" title={p.remoteMcp.url ?? ''}>remote declared</span>
+            <span class="mcp-badge remote" title={p.remoteMcp.url ?? ''}>{REMOTE_DECLARED}</span>
           {/if}
         </div>
         {#if st?.error && (st.status === 'error' || st.status === 'error-port-busy' || st.status === 'stopped-crashed')}
@@ -274,10 +279,17 @@
             >
           </div>
         {/if}
-      {:else if p.remoteMcp?.declared}
-        <div class="row mcp">
-          <span class="mcp-badge remote" title={p.remoteMcp.url ?? ''}>remote MCP declared</span>
-        </div>
+      {:else}
+        <!-- Not 'local', so the app serves nothing for this profile. Whether
+             anything else does is a statement the operator either made or did
+             not, and both cases are said out loud: a blank card here is what
+             made 'off' and 'remote servers only' look identical. -->
+        {@const note = servingNote(mcpMode, p.remoteMcp?.declared === true)}
+        {#if note !== null}
+          <div class="row mcp" data-testid={`serving-${p.name}`}>
+            <span class={`mcp-badge ${note.cls}`} title={p.remoteMcp?.url ?? ''}>{note.text}</span>
+          </div>
+        {/if}
       {/if}
     </button>
   {/each}
@@ -381,6 +393,11 @@
   }
   .ra-wait {
     color: #7a5b00;
+  }
+  .ra-note {
+    color: #666;
+    font-size: 0.72rem;
+    line-height: 1.45;
   }
   .mcp-badge {
     border: 1px solid #ccc;

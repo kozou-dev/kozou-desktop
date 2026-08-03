@@ -16,6 +16,7 @@
   import SemanticMap from './SemanticMap.svelte';
   import { buildMcpClientSnippets } from '../../shared/mcpSnippet';
   import type { CommentDraft } from './lib/commentEmit';
+  import { mcpModeLabel } from './lib/statusCopy';
 
   const api = window.kozouDesktop;
 
@@ -400,21 +401,25 @@
   <header class="top">
     <h1>kozou Desktop <span class="tag">Semantic Map</span></h1>
     <div class="top-actions">
+      <!-- Named by effect, not by setting: the question an operator is asking
+           is who serves MCP for these databases. -->
       <label class="mcp-mode">
-        MCP
+        MCP served by:
         <select
           data-testid="mcp-mode"
           value={pendingMode ?? mcpMode}
           onchange={(e) => void requestMode(e.currentTarget.value as McpMode)}
         >
-          <option value="off">Off</option>
-          <option value="local">Local</option>
-          <option value="remote-only">Remote only</option>
+          <option value="off">{mcpModeLabel('off')}</option>
+          <option value="local">{mcpModeLabel('local')}</option>
+          <option value="remote-only">{mcpModeLabel('remote-only')}</option>
         </select>
       </label>
       {#if pendingMode !== null}
         <span class="mode-confirm" data-testid="mcp-mode-confirm">
-          stop {runningCount} running server{runningCount === 1 ? '' : 's'} and switch to "{pendingMode}"?
+          stop {runningCount} running server{runningCount === 1 ? '' : 's'} and switch to "{mcpModeLabel(
+            pendingMode,
+          )}"?
           <button data-testid="mcp-mode-confirm-yes" onclick={() => pendingMode !== null && void applyMode(pendingMode)}
             >stop &amp; switch</button
           >
