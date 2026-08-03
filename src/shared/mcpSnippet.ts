@@ -8,7 +8,10 @@
 export type McpClientSnippets = {
   serverName: string;
   httpUrl: string;
-  /** Claude Desktop / Cursor mcpServers JSON (pretty-printed). */
+  /** `mcpServers` JSON for a client that connects to a URL from its config,
+   *  e.g. Cursor. Not Claude Desktop: its config file launches local commands,
+   *  and its custom connectors are opened from Anthropic's cloud and require a
+   *  public https address, so neither route reaches a loopback server. */
   mcpServersJson: string;
   /** One-line `claude mcp add` command for Claude Code. */
   claudeCodeCommand: string;
