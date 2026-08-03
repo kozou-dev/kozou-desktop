@@ -1,9 +1,11 @@
 <script lang="ts">
   import type { ContextView } from '../../shared/contextView';
   import type { AiViews, RowAccess } from '../../shared/types';
+  import AiView from './AiView.svelte';
   import CommentEditor from './CommentEditor.svelte';
   import DataPanel from './DataPanel.svelte';
   import JsonTree from './JsonTree.svelte';
+  import { relationAiBlocks } from './lib/aiViewBlocks';
   import { describeTarget, type CommentTarget } from './lib/commentEmit';
 
   let {
@@ -67,16 +69,13 @@
   );
 
   const concept = $derived(view ? (context.concepts.find((c) => c.name === view.name) ?? null) : null);
-  const aiText = $derived.by(() => {
-    if (table) return aiViews.tables[selected] ?? null;
-    if (view) {
-      const parts = [aiViews.views[selected]];
-      if (concept && aiViews.concepts[concept.name]) {
-        parts.push(`// get_concept_context("${concept.name}")`, aiViews.concepts[concept.name]!);
-      }
-      return parts.filter(Boolean).join('\n\n');
-    }
-    return null;
+  // One block per tool result. A view that backs a concept produces two of
+  // them, because that is two calls an agent makes — not one payload with a
+  // separator line, which is what this used to render (see lib/aiViewBlocks).
+  const aiBlocks = $derived.by(() => {
+    if (table) return relationAiBlocks('table', selected, aiViews, null);
+    if (view) return relationAiBlocks('view', selected, aiViews, concept?.name ?? null);
+    return [];
   });
 
   const aiLines = (text: string | null): string[] => (text ? text.split('\n').filter((l) => l.trim() !== '') : []);
@@ -356,12 +355,7 @@
         />
       {/key}
     {:else if activeTab === 'ai'}
-      <p class="hint">
-        What an AI agent receives from the MCP describe tools of a default-configured kozou server
-        for this relation - same functions, same serialization. Server-side opt-ins (RPC exposure
-        config, privilege-aware annotations) are not reproduced here yet.
-      </p>
-      <pre class="aiview" data-testid="ai-view">{aiText ?? '(no AI view available)'}</pre>
+      <AiView blocks={aiBlocks} testid="ai-view" />
     {:else}
       <div class="rawtree"><JsonTree name={entity.qualifiedName} value={entity} open /></div>
     {/if}
@@ -432,9 +426,6 @@
     border-radius: 6px;
     padding: 0.5rem;
     margin: 0.2rem 0;
-  }
-  .aiview {
-    font-family: ui-monospace, monospace;
   }
   ul {
     margin: 0.2rem 0;

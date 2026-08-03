@@ -83,6 +83,33 @@ test('two profiles: map, detail pane, and AI view end-to-end', async () => {
     const aiView = page.getByTestId('ai-view');
     await expect(aiView).toContainText('public.customers');
     await expect(aiView).toContainText('"aiDescription"');
+    // One block per tool result, and the call named outside the payload: a
+    // table is a single describe_table.
+    await expect(aiView.getByTestId('ai-view-block')).toHaveCount(1);
+    await expect(aiView.getByTestId('ai-view-call')).toHaveText(
+      'describe_table {"qualifiedName":"public.customers"}',
+    );
+
+    // A concept-backed view is TWO tool results and must stay two: an agent
+    // makes two calls and never receives them glued into one payload. This
+    // pins the fix for the concatenated blob the pane used to render.
+    await page.getByTestId('map-node-public.recent_orders').click();
+    await page.getByTestId('tab-ai').click();
+    const viewAi = page.getByTestId('ai-view');
+    await expect(viewAi.getByTestId('ai-view-block')).toHaveCount(2);
+    await expect(viewAi.getByTestId('ai-view-call').first()).toHaveText(
+      'describe_view {"qualifiedName":"public.recent_orders"}',
+    );
+    await expect(viewAi.getByTestId('ai-view-call').last()).toHaveText(
+      'get_concept_context {"name":"recent_orders"}',
+    );
+    // Nothing of the app's own inside a payload — no separator, no heading.
+    for (const block of await viewAi.getByTestId('ai-view-block').all()) {
+      await expect(block).not.toContainText('get_concept_context');
+    }
+    // The fidelity boundary is stated on the surface that makes the claim.
+    await expect(viewAi).toContainText('one whole MCP tool result');
+    await expect(viewAi).toContainText('not reproduced here yet');
   }
 
   // F1: overview cards carry counts and annotation coverage.
