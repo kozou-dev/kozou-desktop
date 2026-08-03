@@ -561,7 +561,7 @@
             onsave={saveDrafts}
           />
         {/if}
-        <FunctionsPanel functions={currentContext.functions ?? []} aiText={current.aiViews.functions} />
+        <FunctionsPanel functions={currentContext.functions ?? []} aiViews={current.aiViews} />
         <EnumsPanel enums={currentContext.enums} />
       {:else}
         <p class="empty-note">
