@@ -137,12 +137,14 @@ test('data tab: gated by the grant, browses rows, and pages by cursor', async ()
     const badge = page.getByTestId('rowaccess-badge-browse');
     await expect(badge).toHaveText('rows: off');
 
-    // The ladder has to be readable BEFORE its first step: an operator who
-    // cannot see that editing is a second approval learns it only by having
-    // already granted browsing.
+    // Readable BEFORE the first step: an operator who cannot see that editing
+    // carries an approval of its own learns it only by having already granted
+    // browsing. Visibility, not just text — a note hidden by CSS would satisfy
+    // a text-only assertion.
     const raNote = page.getByTestId('rowaccess-note-browse');
-    await expect(raNote).toContainText('second, separate approval');
-    await expect(raNote).toContainText('no row queries yet');
+    await expect(raNote).toBeVisible();
+    await expect(raNote).toContainText('editing needs an approval of its own');
+    await expect(raNote).toContainText('while this is off');
 
     await page.getByTestId('map-node-public.customers').click({ timeout: 30_000 });
     await expect(page.getByTestId('detail-pane')).toContainText('public.customers');
@@ -167,9 +169,11 @@ test('data tab: gated by the grant, browses rows, and pages by cursor', async ()
     await page.getByTestId('rowaccess-enable-browse').click();
     await expect(badge).toHaveText('rows: browsing');
     await expect.poll(() => prompts(app)).toBe(2);
-    // A grant that says nothing about where the rows are leaves the operator
-    // with permission and nowhere to use it.
+    // A grant that says nothing about where it is used leaves the operator with
+    // permission and nowhere to use it — and it must not promise rows, which
+    // the database and not this app decides.
     await expect(raNote).toContainText('Data tab');
+    await expect(raNote).toContainText('your database decides');
 
     await page.getByTestId('tab-data').click();
     const grid = page.getByTestId('data-grid');
@@ -280,6 +284,11 @@ test('data tab: gated by the grant, browses rows, and pages by cursor', async ()
     // this the section would pass even if a downgrade did prompt, because the
     // stub in force answers affirmatively.
     expect(await prompts(app)).toBe(before);
+    // Back at 'off' after rows were actually read: the note describes the level
+    // in force, so it must not claim no row query has ever run.
+    await expect(raNote).toBeVisible();
+    await expect(raNote).toContainText('while this is off');
+    await expect(raNote).not.toContainText('yet');
   } finally {
     await app.close();
   }

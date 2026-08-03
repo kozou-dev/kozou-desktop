@@ -94,10 +94,14 @@ test('local MCP lifecycle: default off, start, quit closes the port, restore, st
 
   // 'off' and 'remote servers only' used to be indistinguishable on the card:
   // no behaviour branches on 'remote-only', and neither mode said anything for
-  // an undeclared profile. Under 'off' the app claims nothing; under 'remote
-  // servers only' the absence of a declaration is itself stated.
+  // an undeclared profile. Under 'off' the app claims nothing at all — the
+  // header already reads "Nobody (off)" and a card answering underneath it
+  // would contradict that; under 'remote servers only' the absence of a
+  // declaration is itself stated. Visibility, not just text: a note rendered
+  // and then hidden by CSS would satisfy a text-only assertion.
   await expect(first.page.getByTestId('serving-alpha')).toHaveCount(0);
   await first.page.getByTestId('mcp-mode').selectOption('remote-only');
+  await expect(first.page.getByTestId('serving-alpha')).toBeVisible();
   await expect(first.page.getByTestId('serving-alpha')).toHaveText('no serving server declared');
   await first.page.getByTestId('mcp-mode').selectOption('off');
   await expect(first.page.getByTestId('serving-alpha')).toHaveCount(0);
@@ -166,9 +170,20 @@ test('duplicate warning: declared remote MCP on the same database blocks, overri
 
   await addProfile(page, 'declared', { remoteDeclared: true });
   await addProfile(page, 'target');
+  // A declared profile is where 'off' and 'remote servers only' could still
+  // read alike, so check that pair before touching the local mode: under 'off'
+  // the card says nothing even with a declaration stored, and the declaration
+  // reads as a declaration rather than as something the app confirmed.
+  await expect(page.getByTestId('serving-declared')).toHaveCount(0);
+  await page.getByTestId('mcp-mode').selectOption('remote-only');
+  await expect(page.getByTestId('serving-declared')).toBeVisible();
+  await expect(page.getByTestId('serving-declared')).toHaveText('served remotely (declared)');
+  await page.getByTestId('mcp-mode').selectOption('off');
+  await expect(page.getByTestId('serving-declared')).toHaveCount(0);
+
   await page.getByTestId('mcp-mode').selectOption('local');
-  // A declaration is the operator's statement; the app never contacted that
-  // server, so the badge must not read as a verified fact.
+  // Under local the declaration rides beside the app's own MCP badge, in the
+  // same words — one constant, so the two cannot drift apart.
   await expect(page.getByTestId('mcp-declared')).toContainText('served remotely (declared)');
 
   await page.getByTestId('mcp-start-target').click();

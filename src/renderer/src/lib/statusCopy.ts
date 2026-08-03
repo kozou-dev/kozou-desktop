@@ -35,8 +35,8 @@ export function mcpModeLabel(mode: McpMode): string {
 export type CardNote = { text: string; cls: string } | null;
 
 /** The declaration badge's text. Shared because it is rendered from two
- *  places — beside the app's own MCP badge under 'local', and on its own for
- *  the other modes — and two copies would drift. "(declared)" is not padding:
+ *  places — beside the app's own MCP badge under 'local', and on its own under
+ *  'remote-only' — and two copies would drift. "(declared)" is not padding:
  *  the app never contacted the remote server, so this is the operator's claim
  *  and must not read as a verified fact. */
 export const REMOTE_DECLARED = 'served remotely (declared)';
@@ -44,36 +44,55 @@ export const REMOTE_DECLARED = 'served remotely (declared)';
 /** What a profile card says about serving, given the mode and whether this
  *  profile declares a remote MCP server.
  *
- *  The load-bearing case is 'remote-only' with no declaration. Without it the
- *  card renders identically under 'off' and 'remote-only', which is how the
- *  two modes came to be indistinguishable: the app claims nothing serves this
- *  database, and it should say so rather than leave a blank where a statement
- *  belongs.
+ *  Only 'remote-only' says anything. That is what makes it distinguishable from
+ *  'off', which is the whole point: no behaviour differs between the two, so
+ *  the difference has to be the statement the operator made — declared, or
+ *  explicitly not declared.
+ *
+ *  'off' returns null on purpose, declaration or not. The header reads
+ *  "Nobody (off)", and a card that answered "served remotely" underneath it
+ *  would contradict the header on the same screen. Under 'off' the app makes no
+ *  claim about MCP at all; the declaration is still visible in the profile's
+ *  own edit form, and switching to 'remote-only' is what asks the app to report
+ *  it. Under 'local' the card's own MCP row already reports the app's server,
+ *  and the declaration rides beside it there.
  *
  *  A declaration is the operator's statement, not something the app verified —
- *  hence "(declared)" in the text. Under 'local' this returns null: the card's
- *  own MCP row already reports the app's server. */
+ *  hence "(declared)" in the text. */
 export function servingNote(mode: McpMode, declared: boolean): CardNote {
-  if (mode === 'local') return null;
-  if (declared) return { text: REMOTE_DECLARED, cls: 'remote' };
-  if (mode === 'remote-only') return { text: 'no serving server declared', cls: 'warn' };
-  return null;
+  if (mode !== 'remote-only') return null;
+  return declared
+    ? { text: REMOTE_DECLARED, cls: 'remote' }
+    : { text: 'no serving server declared', cls: 'warn' };
 }
 
-/** What row access is in force, what it took, and where the rows appear.
+/** What row access is in force, what it costs, and where it is used.
  *
- *  Stated at every level, including 'off': the ladder has to be visible before
- *  its first step is taken, or "editing is a second approval" is something an
- *  operator only learns by having already granted browsing. And a grant that
- *  offers no hint where rows show up leaves the operator with permission and
- *  nowhere to use it. */
+ *  Stated at every level, 'off' included: that editing carries an approval of
+ *  its own is something an operator would otherwise learn only by having
+ *  already granted browsing, and a grant that hints at no destination leaves
+ *  them with permission and nowhere to use it.
+ *
+ *  Three things this deliberately does NOT say, each because it would be false:
+ *
+ *    * that editing comes *after* browsing. The main-owned gate prompts once
+ *      per raise in level (main/rowAccessGate.ts), so 'off' → 'readwrite' is a
+ *      single approval; the ladder is the order this UI offers, not an
+ *      invariant of the gate. What is true at every level is that editing
+ *      needs an approval of its own.
+ *    * that no row query has ever run. 'off' is the level in force, not a
+ *      history: revoking after a browse returns here, and revoking is
+ *      prompt-free by design. So the tense is about now, not about the past.
+ *    * that rows will be there. The app opens a tab and asks the database; a
+ *      revoked privilege, an RLS policy or a dropped column answers with a
+ *      refusal, and this app is not the thing that decides. */
 export function rowAccessNote(level: RowAccess): string {
   switch (level) {
     case 'readwrite':
-      return 'Rows are on the Data tab of a selected relation; edits run against your database over the connection this profile uses. Turning this off needs no approval.';
+      return 'The Data tab of a selected relation reads and writes rows over the connection this profile uses; your database decides what that connection may see or change. Turning this off needs no approval.';
     case 'read':
-      return 'Rows are on the Data tab of a selected relation, read-only. Editing them is a second, separate approval.';
+      return 'The Data tab of a selected relation reads rows over the connection this profile uses; your database decides what it may see. Editing needs an approval of its own.';
     default:
-      return 'This app runs no row queries yet. Browsing asks for your approval first; editing is a second, separate approval after that.';
+      return 'This app runs no row queries while this is off. Browsing needs your approval, and editing needs an approval of its own.';
   }
 }
