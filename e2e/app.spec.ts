@@ -8,9 +8,21 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { describeTable, describeView, getConceptContext, successResult } from '@kozou/mcp';
 import { _electron as electron, expect, test } from '@playwright/test';
+import { runInspect } from '../src/worker/runInspect.js';
 
 const url = process.env.KOZOU_TEST_DATABASE_URL;
+
+/** The expected text of one tool result, produced the way the server does —
+ *  computed here in the test process, from its own introspection of the same
+ *  database, so the comparison is against the real MCP path rather than
+ *  against a fixture this repo also authors. Without this the AI view's whole
+ *  claim ("this is what an agent receives") is only asserted by counting
+ *  blocks and reading their headings. */
+function toolText(payload: unknown): string {
+  return (successResult(payload) as { content: { text: string }[] }).content[0]!.text;
+}
 
 test.skip(!url, 'KOZOU_TEST_DATABASE_URL not set');
 
@@ -24,6 +36,11 @@ test('two profiles: map, detail pane, and AI view end-to-end', async () => {
     },
   });
   const page = await app.firstWindow();
+
+  // The test's own introspection of the same database. The AI view is checked
+  // against tool results computed from THIS, so the app cannot satisfy the
+  // check by agreeing with itself.
+  const { context: expected } = await runInspect({ url: url!, schemas: ['public'] });
 
   // The add form auto-opens on first run (empty) and closes after each save,
   // and the toggle's label flips between "+ Add database" and "Close". Both
@@ -78,11 +95,47 @@ test('two profiles: map, detail pane, and AI view end-to-end', async () => {
     await expect(detail).toContainText('public.customers');
     await expect(detail).toContainText('@ai');
 
-    // F6: the AI view shows the exact describe payload.
+    // F6: the AI view shows the exact describe payload. Exactness is the whole
+    // claim of this surface, so it is checked as an identity against payloads
+    // this test computes itself — not by looking for substrings, which would
+    // pass just as happily on a re-serialized or truncated payload.
     await page.getByTestId('tab-ai').click();
     const aiView = page.getByTestId('ai-view');
-    await expect(aiView).toContainText('public.customers');
-    await expect(aiView).toContainText('"aiDescription"');
+    // One block per tool result, and the call named outside the payload: a
+    // table is a single describe_table.
+    await expect(aiView.getByTestId('ai-view-block')).toHaveCount(1);
+    await expect(aiView.getByTestId('ai-view-call')).toHaveText(
+      'describe_table {"qualifiedName":"public.customers"}',
+    );
+    expect(await aiView.getByTestId('ai-view-block').innerText()).toBe(
+      toolText(describeTable({ qualifiedName: 'public.customers' }, expected)),
+    );
+
+    // A concept-backed view is TWO tool results and must stay two: an agent
+    // makes two calls and never receives them glued into one payload. This
+    // pins the fix for the concatenated blob the pane used to render.
+    await page.getByTestId('map-node-public.recent_orders').click();
+    await page.getByTestId('tab-ai').click();
+    const viewAi = page.getByTestId('ai-view');
+    const viewBlocks = viewAi.getByTestId('ai-view-block');
+    await expect(viewBlocks).toHaveCount(2);
+    await expect(viewAi.getByTestId('ai-view-call').first()).toHaveText(
+      'describe_view {"qualifiedName":"public.recent_orders"}',
+    );
+    await expect(viewAi.getByTestId('ai-view-call').last()).toHaveText(
+      'get_concept_context {"name":"recent_orders"}',
+    );
+    // Each block is one result, whole: a separator line, an injected heading,
+    // or a joined second payload all break these two equalities.
+    expect(await viewBlocks.first().innerText()).toBe(
+      toolText(describeView({ qualifiedName: 'public.recent_orders' }, expected)),
+    );
+    expect(await viewBlocks.last().innerText()).toBe(
+      toolText(getConceptContext({ name: 'recent_orders' }, expected)),
+    );
+    // The fidelity boundary is stated on the surface that makes the claim.
+    await expect(viewAi).toContainText('the text of one MCP tool result');
+    await expect(viewAi).toContainText('not reproduced here yet');
   }
 
   // F1: overview cards carry counts and annotation coverage.
