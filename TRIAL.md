@@ -54,7 +54,7 @@ Open-ended — a sentence each is plenty:
   annotation, or view didn't appear where you expected. (Foreign keys to
   schemas you didn't add to the profile are intentionally hidden; views that
   read from outside those schemas show as dashed "ghost" nodes.)
-- The **local MCP hub** (**MCP served by:** → **This app (local)**, then **start** on a card,
+- The **local MCP hub** (**This app may serve MCP:** → **Yes, one per profile**, then **start** on a card,
   then **AI client config**) serves the same describe surface to your own AI
   client, one server per profile — see the README for the steps. If you connect
   it: did having every database you added reachable from one place beat running

@@ -59,7 +59,7 @@ The app can also serve the same compiled semantics to AI clients on your
 machine, so you and an agent read one model instead of two. It is **off by
 default**, and read-only regardless of anything else you have opted into.
 
-1. Set the header's **MCP served by:** control to **This app (local)**.
+1. Set the header's **This app may serve MCP:** control to **Yes, one per profile**.
 2. On a profile card, click **start** — the badge becomes `MCP on :<port>`.
 3. Click **AI client config** and copy the form your client wants — the panel
    offers three.
@@ -97,9 +97,11 @@ opposite of what it is for. Its own configuration file launches local commands
 (stdio) rather than connecting to a URL. Reaching the hub from there needs a
 local stdio-to-HTTP bridge process; this build neither provides nor tests one.
 
-One server per profile, so several databases can be served at once — each
-under its own name, port and path. Which is the point: an agent gets every
-database you have added, from one place, without a server per database.
+One server per profile, so several databases can be served at once — each under
+its own name, port and path. What is in one place is the managing of them: you
+start and stop them here, and this app hands you the client config for each. Your
+client still lists them one by one. A single endpoint that routes to several
+databases is not what this builds.
 
 What it serves is the **describe surface only**: `list_tables`,
 `describe_table`, `list_views`, `describe_view`, `list_concepts`,
@@ -134,19 +136,19 @@ Worth knowing before you paste:
   sits at `Pending approval` until you approve it once inside `claude`. The
   copied command adds no `--scope`, so it lands in whatever scope your CLI
   defaults to — local at the time of writing, which connects immediately.
-- **Remote servers only** (the third mode) serves nothing locally. It exists for
-  databases already covered by a remote kozou server, which a profile can
-  *declare* — and that declaration is what makes the app warn you before
-  serving a duplicate of one. In that mode every card states its declaration or
-  the absence of one (`served remotely (declared)` / `no serving server
-  declared`), which is what distinguishes it from **Nobody (off)**: no
-  behaviour differs between the two, so the difference is a statement you made,
-  and the card is where it is said. Under **Nobody (off)** the app says nothing
-  about MCP at all, declaration or not — the header already says nobody serves,
-  and a card contradicting it on the same screen would be worse than a blank.
-  A declaration is never verified: the app does not contact that server, and
-  the word *declared* is there because what it reports is your setting, not a
-  reachability check.
+- **A database already served from elsewhere** can be marked as such on the
+  profile: *a remote MCP server already serves this database*. That declaration
+  does two things. Its card carries `served remotely (declared)` whether or not
+  this app is serving anything — it is a fact about another server, so our own
+  setting does not change it. And starting a local server for the same database
+  (same host, port and database name) stops to warn you first: two servers could
+  then answer the same question differently, since this app does not reproduce a
+  server's own opt-ins. You can go ahead anyway, because the declaration is
+  something you told us, not something we checked: the app never contacts that
+  server, the declaration is valid with no URL at all, and a remote server that
+  has since stopped would otherwise leave you unable to start a local one without
+  first deleting the record saying it exists. The word *declared* is in the badge
+  for the same reason — it reports your setting, not a reachability check.
 
 ## Local unsigned build
 

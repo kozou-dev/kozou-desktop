@@ -83,10 +83,14 @@ test('local MCP lifecycle: default off, start, quit closes the port, restore, st
   // --- first launch: default off, explicit enable + start -------------------
   const first = await launch(userData);
   await expect(first.page.getByTestId('mcp-mode')).toHaveValue('off');
-  // The control answers whether THIS APP serves, and the options answer it too —
-  // the setting's own values are not what an operator is asking. There are two:
-  // a third ('remote-only') branched no behaviour and could not be told apart
-  // from 'off' by anything it did, so it is gone.
+  // The question asked is part of the claim, so assert it and not only the
+  // answers: it must be about PERMISSION ("may serve") and about THIS APP. Only
+  // one of those is visible in the options — the first draft answered "Yes, one
+  // per profile" under "This app serves MCP", which contradicted the `MCP off`
+  // badge asserted a few lines below. There are two options: a third
+  // ('remote-only') branched no behaviour and could not be told apart from 'off'
+  // by anything it did, so it is gone.
+  await expect(first.page.locator('label.mcp-mode')).toContainText('This app may serve MCP');
   await expect(first.page.getByTestId('mcp-mode')).toContainText('No');
   await expect(first.page.getByTestId('mcp-mode')).toContainText('Yes, one per profile');
   await expect(first.page.locator('[data-testid="mcp-mode"] option')).toHaveCount(2);
@@ -137,6 +141,12 @@ test('local MCP lifecycle: default off, start, quit closes the port, restore, st
   // running and snaps the select back.
   await second.page.getByTestId('mcp-mode').selectOption('off');
   await expect(second.page.getByTestId('mcp-mode-confirm')).toBeVisible();
+  // The change is not in force while the prompt is up: the control is disabled
+  // until it is answered, and the server is still listening. What keeps a pending
+  // "No" from reading as a claim is the question it answers — "may serve" is about
+  // permission, not about what is running.
+  await expect(second.page.getByTestId('mcp-mode')).toBeDisabled();
+  expect(await portOpen(port)).toBe(true);
   await second.page.getByTestId('mcp-mode-confirm-no').click();
   await expect(second.page.getByTestId('mcp-mode-confirm')).toHaveCount(0);
   await expect(second.page.getByTestId('mcp-mode')).toHaveValue('local');

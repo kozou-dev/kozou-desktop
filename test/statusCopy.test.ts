@@ -22,9 +22,21 @@ const MODES: McpMode[] = ['off', 'local'];
 const LEVELS: RowAccess[] = ['off', 'read', 'readwrite'];
 
 describe('mcpModeLabel', () => {
-  it('answers whether this app serves, rather than naming the setting', () => {
+  it('answers whether this app may serve, rather than naming the setting', () => {
     expect(mcpModeLabel('off')).toBe('No');
     expect(mcpModeLabel('local')).toBe('Yes, one per profile');
+  });
+
+  it('answers about permission, not about what is running', () => {
+    // 'local' allows a profile to start a server and starts none by itself, so
+    // every card reads `MCP off` until one is started — the e2e asserts exactly
+    // that, one line after the mode switch. A label phrased as observed state
+    // contradicts those cards on the same screen, which is what the first draft
+    // of this change did: it said "Yes, one per profile" under the heading "This
+    // app serves MCP", and a reviewer found the contradiction in my own test.
+    for (const mode of MODES) {
+      expect(mcpModeLabel(mode)).not.toMatch(/serving|serves|running|active|live|listening/i);
+    }
   });
 
   it('gives the two modes two different labels', () => {

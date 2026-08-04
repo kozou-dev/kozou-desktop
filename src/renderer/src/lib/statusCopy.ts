@@ -18,15 +18,21 @@
 
 import type { McpMode, RowAccess } from '../../../shared/types.js';
 
-/** The answer to "does this app serve MCP", named by its effect rather than by
- *  the setting's internal value.
+/** The answer to "MAY this app serve MCP", named by its effect rather than by the
+ *  setting's internal value.
  *
- *  The question is about this app alone. An earlier version asked *who* serves
- *  and offered "remote servers only" as a third answer, which was a mistake in
- *  two ways: the mode changed nothing, and answering "nobody" while a card
- *  underneath reported a declared remote server was a contradiction the same
- *  screen could print. What something else serves is reported by `servingNote`,
- *  per profile, independently of this. */
+ *  Permission, not observed state. 'local' allows a profile to start a server; it
+ *  starts none by itself, and every card reads `MCP off` until you start one. An
+ *  answer phrased as "yes, serving" would contradict those cards on the same
+ *  screen — the first draft of this said exactly that, and the e2e test one line
+ *  below the mode switch asserts `MCP off`.
+ *
+ *  The question is also about this app alone. An earlier version asked *who*
+ *  serves and offered "remote servers only" as a third answer, which was a
+ *  mistake twice over: the mode changed nothing, and answering "nobody" while a
+ *  card underneath reported a declared remote server was another contradiction
+ *  the same screen could print. What something else serves is reported by
+ *  `servingNote`, per profile, independently of this. */
 export function mcpModeLabel(mode: McpMode): string {
   return mode === 'local' ? 'Yes, one per profile' : 'No';
 }

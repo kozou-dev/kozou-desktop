@@ -260,15 +260,19 @@
         {/if}
         {#if duplicatePending?.profile === p.name}
           <div class="row mcp-dup" data-testid={`mcp-dup-${p.name}`}>
-            <!-- Say what the collision costs, not just that there is one. Nothing
-                 breaks if both run: the ports differ, both are read-only, and
-                 neither can dispatch an execution tool. What goes wrong is that an
-                 agent asks about one database and gets two answers that disagree,
-                 because this app does not reproduce a server's own opt-ins. -->
+            <!-- Say what the collision risks, not just that there is one — and
+                 stay inside what is known. About our own side we can be definite:
+                 our port is ours, our reads run read-only, and we cannot dispatch
+                 an execution tool. About the declared server we know nothing at
+                 all — not its port, not its options, not whether it is even up,
+                 since a declaration is never contacted and needs no URL. So the
+                 cost is stated as a possibility: two servers answering the same
+                 question differently, which is possible here because this app
+                 does not reproduce a server's own opt-ins. -->
             <span
-              >same database as declared remote MCP: {duplicatePending.duplicates.join(', ')}. Both
-              would answer, and differently — this app does not reproduce a server's own opt-ins
-              (RPC exposure, privilege-aware annotations).</span
+              >same database as declared remote MCP: {duplicatePending.duplicates.join(', ')}. Two
+              servers could then answer the same question differently — this app does not reproduce a
+              server's own opt-ins (RPC exposure, privilege-aware annotations).</span
             >
             <span
               class="linkish"

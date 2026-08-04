@@ -407,11 +407,23 @@
            let the header say nobody serves while a card below reported a declared
            remote server. A profile's declaration is reported on the card, whatever
            this says. -->
+      <!-- "may serve" because this is permission, not observed state: 'local'
+           lets a profile start a server and starts none by itself, so the cards
+           below can read `MCP off` while this reads yes. -->
       <label class="mcp-mode">
-        This app serves MCP:
+        This app may serve MCP:
+        <!-- Shows the value being asked for and goes disabled until the prompt is
+             answered: the change is not in force yet, and cancelling puts it back.
+             What keeps that honest is the question above — "may serve" is about
+             permission, so a pending "No" reads as the request it is rather than
+             as a claim that nothing is serving. (Snapping the control back to the
+             mode in force does not work here anyway: the DOM value has already
+             moved, and `mcpMode` has not changed, so there is nothing for Svelte
+             to re-render.) -->
         <select
           data-testid="mcp-mode"
           value={pendingMode ?? mcpMode}
+          disabled={pendingMode !== null}
           onchange={(e) => void requestMode(e.currentTarget.value as McpMode)}
         >
           <option value="off">{mcpModeLabel('off')}</option>
@@ -420,11 +432,13 @@
       </label>
       {#if pendingMode !== null}
         <span class="mode-confirm" data-testid="mcp-mode-confirm">
-          <!-- Names the consequence, not the label being switched to: "switch to
-               No" read as a setting change, when what is about to happen is that
-               running servers stop. -->
-          stop {runningCount} running server{runningCount === 1 ? '' : 's'} and serve no MCP from this
-          app?
+          <!-- The control keeps showing the mode in force, not the one being
+               asked for: servers are still running until this is answered, and
+               cancelling leaves them running. Showing the pending value made the
+               header answer "No" beside a prompt saying a server was still up.
+               The question names the consequence but does not promise it — a
+               child that refuses to die is a state this cannot rule out. -->
+          stop {runningCount} running server{runningCount === 1 ? '' : 's'} and turn this off?
           <button data-testid="mcp-mode-confirm-yes" onclick={() => pendingMode !== null && void applyMode(pendingMode)}
             >stop &amp; switch</button
           >
