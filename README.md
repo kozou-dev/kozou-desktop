@@ -139,11 +139,16 @@ Worth knowing before you paste:
 - **A database already served from elsewhere** can be marked as such on the
   profile: *a remote MCP server already serves this database*. That declaration
   does two things. Its card carries `served remotely (declared)` whether or not
-  this app is serving anything — it is a fact about another server, so our own
-  setting does not change it. And starting a local server for the same database
-  (same host, port and database name) stops to warn you first: two servers could
-  then answer the same question differently, since this app does not reproduce a
-  server's own opt-ins. You can go ahead anyway, because the declaration is
+  this app is serving anything — what you recorded is about another server, so our
+  own setting does not change it. And starting a local server for a database this
+  app can see is the same one stops to warn you first: two servers could then
+  answer the same question differently, since this app does not reproduce a
+  server's own opt-ins. That check compares host, port and database name as the
+  connection URL spells them, and it is deliberately one-sided — a match is
+  meant to be reliable, a miss is accepted. A URL that names the database another
+  way (a `dbname` query parameter, a DNS alias, a pooler in front) is not matched
+  and starts without the warning. You can go ahead past the warning anyway,
+  because the declaration is
   something you told us, not something we checked: the app never contacts that
   server, the declaration is valid with no URL at all, and a remote server that
   has since stopped would otherwise leave you unable to start a local one without

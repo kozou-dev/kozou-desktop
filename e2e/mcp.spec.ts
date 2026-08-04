@@ -141,10 +141,13 @@ test('local MCP lifecycle: default off, start, quit closes the port, restore, st
   // running and snaps the select back.
   await second.page.getByTestId('mcp-mode').selectOption('off');
   await expect(second.page.getByTestId('mcp-mode-confirm')).toBeVisible();
-  // The change is not in force while the prompt is up: the control is disabled
-  // until it is answered, and the server is still listening. What keeps a pending
-  // "No" from reading as a claim is the question it answers — "may serve" is about
-  // permission, not about what is running.
+  // The control must keep answering with the permission IN FORCE while the prompt
+  // is up: the old mode still stands, the server is still listening, and
+  // cancelling leaves it that way. Showing the requested value put "No" on screen
+  // beside a prompt about a live server — a false answer with a disclaimer beside
+  // it. (Asserting the value here is the point: it only holds because the element
+  // is keyed on the pending mode and rebuilt from the mode in force.)
+  await expect(second.page.getByTestId('mcp-mode')).toHaveValue('local');
   await expect(second.page.getByTestId('mcp-mode')).toBeDisabled();
   expect(await portOpen(port)).toBe(true);
   await second.page.getByTestId('mcp-mode-confirm-no').click();

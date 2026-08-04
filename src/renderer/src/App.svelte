@@ -65,6 +65,11 @@
   // Local MCP serving state (live registry pushed from main; the store's
   // allocation/autoStart ride the same entries).
   let mcpMode = $state<McpMode>('off');
+  // The stored mode arrives over IPC, and until it does 'off' is a placeholder,
+  // not an answer. Rendering the control on that placeholder answers "No" for a
+  // profile whose permission is 'local' — briefly, but the answer is on screen
+  // and main may already be restoring a server behind it. So the control waits.
+  let modeKnown = $state(false);
   let mcp = $state<Record<string, McpStatusEntry>>({});
   let duplicatePending = $state<{ profile: string; duplicates: string[] } | null>(null);
   // A native approval dialog is modal to the window, so at most one row-access
@@ -92,6 +97,7 @@
   async function initMcp(): Promise<void> {
     try {
       mcpMode = await api.mcpModeGet();
+      modeKnown = true;
       applyMcpStatus(await api.mcpStatus());
     } catch (err) {
       formError = message(err);
@@ -409,38 +415,47 @@
            this says. -->
       <!-- "may serve" because this is permission, not observed state: 'local'
            lets a profile start a server and starts none by itself, so the cards
-           below can read `MCP off` while this reads yes. -->
-      <label class="mcp-mode">
-        This app may serve MCP:
-        <!-- Shows the value being asked for and goes disabled until the prompt is
-             answered: the change is not in force yet, and cancelling puts it back.
-             What keeps that honest is the question above — "may serve" is about
-             permission, so a pending "No" reads as the request it is rather than
-             as a claim that nothing is serving. (Snapping the control back to the
-             mode in force does not work here anyway: the DOM value has already
-             moved, and `mcpMode` has not changed, so there is nothing for Svelte
-             to re-render.) -->
-        <select
-          data-testid="mcp-mode"
-          value={pendingMode ?? mcpMode}
-          disabled={pendingMode !== null}
-          onchange={(e) => void requestMode(e.currentTarget.value as McpMode)}
-        >
-          <option value="off">{mcpModeLabel('off')}</option>
-          <option value="local">{mcpModeLabel('local')}</option>
-        </select>
-      </label>
+           below can read `MCP off` while this reads yes. It waits for the stored
+           mode rather than answering from the 'off' placeholder. -->
+      {#if modeKnown}
+        <label class="mcp-mode">
+          This app may serve MCP:
+          <!-- Keeps showing the permission IN FORCE, never the one being asked
+               for: until the prompt is answered the old mode still stands, cards
+               can still start servers, and cancelling leaves everything as it was.
+               Showing the pending value put "No" on screen beside a prompt about a
+               live server — a false answer with a disclaimer next to it.
+               `{#key}` is what makes that possible: the DOM value has already
+               moved when the user picked an option, and `mcpMode` has not changed,
+               so Svelte has nothing to re-render. Keying on `pendingMode` throws
+               the element away and rebuilds it from `mcpMode`. -->
+          {#key pendingMode}
+            <select
+              data-testid="mcp-mode"
+              value={mcpMode}
+              disabled={pendingMode !== null}
+              onchange={(e) => void requestMode(e.currentTarget.value as McpMode)}
+            >
+              <option value="off">{mcpModeLabel('off')}</option>
+              <option value="local">{mcpModeLabel('local')}</option>
+            </select>
+          {/key}
+        </label>
+      {/if}
       {#if pendingMode !== null}
         <span class="mode-confirm" data-testid="mcp-mode-confirm">
-          <!-- The control keeps showing the mode in force, not the one being
-               asked for: servers are still running until this is answered, and
-               cancelling leaves them running. Showing the pending value made the
-               header answer "No" beside a prompt saying a server was still up.
-               The question names the consequence but does not promise it — a
-               child that refuses to die is a state this cannot rule out. -->
-          stop {runningCount} running server{runningCount === 1 ? '' : 's'} and turn this off?
+          <!-- States what is running and asks the question; it does not promise
+               the servers will be gone. `UtilityProcess.kill()`'s failure result is
+               ignored and the wait gives up after three seconds, so a child that
+               refuses to die leaves a listener behind. "stop N and turn this off?"
+               promised exactly that, which is why it now says they will be asked. -->
+          turn this off? {runningCount} running server{runningCount === 1 ? '' : 's'} will be asked to
+          stop.
+          <!-- "turn it off" is what this can guarantee: the permission is written
+               and takes effect. Stopping the children is attempted, not promised,
+               so the button no longer says "stop". -->
           <button data-testid="mcp-mode-confirm-yes" onclick={() => pendingMode !== null && void applyMode(pendingMode)}
-            >stop &amp; switch</button
+            >turn it off</button
           >
           <button data-testid="mcp-mode-confirm-no" onclick={() => (pendingMode = null)}>cancel</button>
         </span>
