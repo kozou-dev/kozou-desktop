@@ -118,9 +118,34 @@ describe('rowAccessNote', () => {
   it('leaves the database as the authority on what a grant can reach', () => {
     // A grant opens the tab and lets the app ask; a revoked privilege or an RLS
     // policy answers with a refusal. Promising rows would be promising
-    // something this app does not decide.
+    // something this app does not decide. The database is the authority on what
+    // a grant reaches — for writing it is not the only limit, which is what the
+    // next test is about.
     expect(rowAccessNote('read')).toContain('your database decides');
     expect(rowAccessNote('readwrite')).toContain('your database decides');
+  });
+
+  it('attributes our own write limits to this app, not to the database', () => {
+    // `canEdit` (DetailPane.svelte) requires a table and a primary key on top of
+    // the grant, and both refusals are ours: kozou answers a write to a view
+    // with a 405, and a table without a primary key leaves no id to address a
+    // row by. Wording that named only the database would make an operator who
+    // granted editing and then selected a view read our refusal as its answer.
+    //
+    // Asserted as three things the text must contain rather than as a phrase it
+    // must avoid: a deny-list on the database clause is satisfied by one
+    // rewording, whereas dropping the attribution or the two relation shapes it
+    // names is exactly the regression. Rewording these on purpose fails here,
+    // which is the point — the text and this test say the same thing twice.
+    //
+    // What this does not catch, measured rather than assumed: text that keeps
+    // all three and appends a false cause ("...because your database refuses
+    // those writes"). A deny-list that caught that would also have to catch the
+    // database clause this level legitimately carries, so the hole stays open.
+    const rw = rowAccessNote('readwrite');
+    expect(rw).toMatch(/this app offers no write controls/i);
+    expect(rw).toMatch(/\bview\b/i);
+    expect(rw).toMatch(/primary key/i);
   });
 
   it('gives every level its own text', () => {

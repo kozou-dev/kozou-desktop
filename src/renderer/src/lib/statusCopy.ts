@@ -85,11 +85,21 @@ export function servingNote(mode: McpMode, declared: boolean): CardNote {
  *      prompt-free by design. So the tense is about now, not about the past.
  *    * that rows will be there. The app opens a tab and asks the database; a
  *      revoked privilege, an RLS policy or a dropped column answers with a
- *      refusal, and this app is not the thing that decides. */
+ *      refusal, and this app is not the thing that decides.
+ *
+ *  One thing said at the editing level and nowhere else: that this app offers no
+ *  write controls for a view or a table without a primary key. The grant is not
+ *  the only thing that governs writing — `canEdit` in DetailPane.svelte also
+ *  requires a table and a primary key, and both of those refusals are ours (a
+ *  write to a view is answered by kozou with a 405; a table without a primary
+ *  key leaves no id to address a row by). Leaving the level's text at "your
+ *  database decides what that connection may see or change" would make an
+ *  operator who granted editing and then selected a view read our own refusal as
+ *  the database's answer. */
 export function rowAccessNote(level: RowAccess): string {
   switch (level) {
     case 'readwrite':
-      return 'The Data tab of a selected relation reads and writes rows over the connection this profile uses; your database decides what that connection may see or change. Turning this off needs no approval.';
+      return 'The Data tab of a selected relation reads and writes rows over the connection this profile uses; your database decides what that connection may see or change, and this app offers no write controls for a view or a table without a primary key. Turning this off needs no approval.';
     case 'read':
       return 'The Data tab of a selected relation reads rows over the connection this profile uses; your database decides what it may see. Editing needs an approval of its own.';
     default:
