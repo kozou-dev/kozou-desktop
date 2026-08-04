@@ -318,15 +318,20 @@ export class ProfileStore {
     return { url: joinDbUrl(p.url, password), schemas: p.schemas, timeoutMs: p.timeoutMs };
   }
 
-  /** App-wide MCP mode. Junk on disk degrades to 'off' — the safe default. */
+  /** App-wide MCP mode. Junk on disk degrades to 'off' — the safe default, and
+   *  the only value that is safe to guess. A 'remote-only' written by an earlier
+   *  build lands here too: that mode served nothing and started nothing, so
+   *  reading it as 'off' preserves the behaviour the profile already had. The
+   *  value is left on disk rather than rewritten, because a read must not
+   *  migrate the file (an older build reading it back would find its own value
+   *  gone, and the file format stays at version 1 by design). */
   mcpMode(): McpMode {
-    const raw = this.read().mcpMode;
-    return raw === 'local' || raw === 'remote-only' ? raw : 'off';
+    return this.read().mcpMode === 'local' ? 'local' : 'off';
   }
 
   setMcpMode(mode: unknown): McpMode {
-    if (mode !== 'off' && mode !== 'local' && mode !== 'remote-only') {
-      throw new Error('mcpMode must be one of "off" | "local" | "remote-only"');
+    if (mode !== 'off' && mode !== 'local') {
+      throw new Error('mcpMode must be one of "off" | "local"');
     }
     const data = this.read();
     data.mcpMode = mode;

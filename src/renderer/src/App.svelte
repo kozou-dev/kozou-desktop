@@ -401,10 +401,14 @@
   <header class="top">
     <h1>kozou Desktop <span class="tag">Semantic Map</span></h1>
     <div class="top-actions">
-      <!-- Named by effect, not by setting: the question an operator is asking
-           is who serves MCP for these databases. -->
+      <!-- Named by effect, not by setting — and scoped to this app, because that
+           is the only thing the setting decides. Asking "who serves" invited a
+           third answer ("remote servers only") that changed no behaviour, and it
+           let the header say nobody serves while a card below reported a declared
+           remote server. A profile's declaration is reported on the card, whatever
+           this says. -->
       <label class="mcp-mode">
-        MCP served by:
+        This app serves MCP:
         <select
           data-testid="mcp-mode"
           value={pendingMode ?? mcpMode}
@@ -412,14 +416,15 @@
         >
           <option value="off">{mcpModeLabel('off')}</option>
           <option value="local">{mcpModeLabel('local')}</option>
-          <option value="remote-only">{mcpModeLabel('remote-only')}</option>
         </select>
       </label>
       {#if pendingMode !== null}
         <span class="mode-confirm" data-testid="mcp-mode-confirm">
-          stop {runningCount} running server{runningCount === 1 ? '' : 's'} and switch to "{mcpModeLabel(
-            pendingMode,
-          )}"?
+          <!-- Names the consequence, not the label being switched to: "switch to
+               No" read as a setting change, when what is about to happen is that
+               running servers stop. -->
+          stop {runningCount} running server{runningCount === 1 ? '' : 's'} and serve no MCP from this
+          app?
           <button data-testid="mcp-mode-confirm-yes" onclick={() => pendingMode !== null && void applyMode(pendingMode)}
             >stop &amp; switch</button
           >

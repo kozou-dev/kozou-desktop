@@ -1,9 +1,11 @@
 // Two claims about what an operator can read off the screen, both of which
 // regress silently in markup:
 //
-//   * the three MCP modes are distinguishable. 'off' and 'remote-only' used to
-//     render identically, because no behaviour branches on 'remote-only' and
-//     the card showed nothing for an undeclared profile in either mode;
+//   * the MCP setting answers a question about THIS APP, and a profile's
+//     declaration that something else serves its database is reported whatever
+//     that setting says. A third mode ('remote-only') used to carry those
+//     declarations while branching no behaviour at all, and the first person to
+//     use a build could not tell what choosing it would do;
 //   * the row-access ladder is legible before its first step — that editing is
 //     a second approval, and where rows appear once granted.
 
@@ -16,64 +18,64 @@ import {
 } from '../src/renderer/src/lib/statusCopy.js';
 import type { McpMode, RowAccess } from '../src/shared/types.js';
 
-const MODES: McpMode[] = ['off', 'local', 'remote-only'];
+const MODES: McpMode[] = ['off', 'local'];
 const LEVELS: RowAccess[] = ['off', 'read', 'readwrite'];
 
 describe('mcpModeLabel', () => {
-  it('names each mode by who serves, not by the setting value', () => {
-    expect(mcpModeLabel('off')).toBe('Nobody (off)');
-    expect(mcpModeLabel('local')).toBe('This app (local)');
-    expect(mcpModeLabel('remote-only')).toBe('Remote servers only');
+  it('answers whether this app serves, rather than naming the setting', () => {
+    expect(mcpModeLabel('off')).toBe('No');
+    expect(mcpModeLabel('local')).toBe('Yes, one per profile');
   });
 
-  it('gives the three modes three different labels', () => {
-    expect(new Set(MODES.map(mcpModeLabel)).size).toBe(3);
+  it('gives the two modes two different labels', () => {
+    expect(new Set(MODES.map(mcpModeLabel)).size).toBe(2);
   });
 
   it('never shows the raw setting value', () => {
-    // 'remote-only' as a label is the setting's identifier leaking into the UI;
-    // it also reads as a restriction on the app rather than a statement about
-    // who serves.
+    // The setting's identifier leaking into the UI names the mechanism instead
+    // of its effect, and 'local' as a label reads as a restriction rather than
+    // as an answer.
     for (const mode of MODES) expect(mcpModeLabel(mode)).not.toBe(mode);
+  });
+
+  it('never speaks for servers this app does not run', () => {
+    // The label used to answer "who serves", and "Nobody (off)" was false the
+    // moment a profile declared a remote server — the same screen could print
+    // the contradiction. Whatever this setting says, it may only speak about us.
+    for (const mode of MODES) {
+      expect(mcpModeLabel(mode)).not.toMatch(/nobody|no one|none|remote|elsewhere|only/i);
+    }
   });
 });
 
 describe('servingNote', () => {
-  it('says nothing extra under local - the card reports the app own MCP row', () => {
-    expect(servingNote('local', false)).toBeNull();
-    expect(servingNote('local', true)).toBeNull();
-  });
-
   it('reports a declaration as a declaration, not as a verified fact', () => {
-    const note = servingNote('remote-only', true);
+    const note = servingNote(true);
     expect(note?.text).toBe(REMOTE_DECLARED);
     expect(note?.text).toContain('declared');
   });
 
-  it('distinguishes remote-only from off in both declaration states', () => {
-    // The whole point: without this, both modes render the same card and an
-    // operator cannot tell which one is in force from the profile alone.
-    for (const declared of [false, true]) {
-      expect(servingNote('remote-only', declared)).not.toBeNull();
-      expect(servingNote('off', declared)).toBeNull();
-    }
-    expect(servingNote('remote-only', false)?.text).toBe('no serving server declared');
+  it('says nothing when nothing is declared', () => {
+    // The common case. "None declared" on every card would make the quiet state
+    // the loud one, and the absence is already visible where it is set — the
+    // profile's own edit form.
+    expect(servingNote(false)).toBeNull();
   });
 
-  it('says nothing at all under off, declaration or not', () => {
-    // The header reads "Nobody (off)". A card answering "served remotely"
-    // underneath it would contradict the header on the same screen, so under
-    // 'off' the app makes no MCP claim at all.
-    expect(servingNote('off', true)).toBeNull();
-    expect(servingNote('off', false)).toBeNull();
+  it('does not take this app own mode into account', () => {
+    // A declaration is a fact about someone else's server: it does not stop
+    // being true when our setting is off. Taking the mode is what made the note
+    // vanish under 'off' and appear under a mode that did nothing else — so the
+    // signature carries the declaration alone.
+    expect(servingNote).toHaveLength(1);
   });
 
   it('never claims the app checked anything', () => {
-    for (const mode of MODES) {
-      for (const declared of [false, true]) {
-        const text = servingNote(mode, declared)?.text ?? '';
-        expect(text).not.toMatch(/reachable|verified|responding|online|confirmed/i);
-      }
+    // There may not even be an address to have checked: a declaration is valid
+    // with no URL at all.
+    for (const declared of [false, true]) {
+      const text = servingNote(declared)?.text ?? '';
+      expect(text).not.toMatch(/reachable|verified|responding|online|confirmed/i);
     }
   });
 });

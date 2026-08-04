@@ -260,7 +260,16 @@
         {/if}
         {#if duplicatePending?.profile === p.name}
           <div class="row mcp-dup" data-testid={`mcp-dup-${p.name}`}>
-            <span>same database as declared remote MCP: {duplicatePending.duplicates.join(', ')}</span>
+            <!-- Say what the collision costs, not just that there is one. Nothing
+                 breaks if both run: the ports differ, both are read-only, and
+                 neither can dispatch an execution tool. What goes wrong is that an
+                 agent asks about one database and gets two answers that disagree,
+                 because this app does not reproduce a server's own opt-ins. -->
+            <span
+              >same database as declared remote MCP: {duplicatePending.duplicates.join(', ')}. Both
+              would answer, and differently — this app does not reproduce a server's own opt-ins
+              (RPC exposure, privilege-aware annotations).</span
+            >
             <span
               class="linkish"
               role="button"
@@ -280,11 +289,12 @@
           </div>
         {/if}
       {:else}
-        <!-- Not 'local', so the app serves nothing for this profile. Whether
-             anything else does is a statement the operator either made or did
-             not, and both cases are said out loud: a blank card here is what
-             made 'off' and 'remote servers only' look identical. -->
-        {@const note = servingNote(mcpMode, p.remoteMcp?.declared === true)}
+        <!-- This app serves nothing for this profile. A declaration that
+             something else does is still reported here, because it is a fact
+             about another server and does not stop being true when our own
+             setting is off. Under 'local' the same badge rides beside our MCP
+             row above, from the same constant. -->
+        {@const note = servingNote(p.remoteMcp?.declared === true)}
         {#if note !== null}
           <div class="row mcp" data-testid={`serving-${p.name}`}>
             <span class={`mcp-badge ${note.cls}`} title={p.remoteMcp?.url ?? ''}>{note.text}</span>

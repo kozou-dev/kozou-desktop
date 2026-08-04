@@ -1,69 +1,63 @@
 // The words the app uses for two states an operator has to be able to read off
-// the screen without opening anything: who serves MCP, and what row access is
-// in force.
+// the screen without opening anything: whether this app serves MCP, and what row
+// access is in force.
 //
-// Both were legible only to someone who already knew the design. The MCP mode
-// was a bare "MCP" label over Off / Local / Remote only, which named the
-// setting rather than its effect — and because no behaviour branches on
-// 'remote-only' (every branch is `=== 'local'` / `!== 'local'`), that mode was
-// indistinguishable from 'off' on screen. Row access showed a level badge and
-// an "enable browsing" link, and said nothing about what the approval covers,
-// that editing is a second approval, or where rows then appear.
+// Both were legible only to someone who already knew the design. The MCP setting
+// was a bare "MCP" label over Off / Local / Remote only, which named the setting
+// rather than its effect. Naming the effect then exposed the real problem: the
+// third mode branched no behaviour at all (every branch is `=== 'local'` /
+// `!== 'local'`), so "remote servers only" was a label over nothing, and the
+// first person to use a build could not tell what choosing it would do. It is
+// gone. The question is now about this app alone, and a profile's declaration
+// that something else serves its database stands on its own. Row access showed a
+// level badge and an "enable browsing" link, and said nothing about what the
+// approval covers, that editing is a second approval, or where rows then appear.
 //
-// Kept here as pure functions so the copy is unit-testable: the claim that two
-// modes are distinguishable is exactly the kind of thing that regresses
-// silently in markup.
+// Kept here as pure functions so the copy is unit-testable: prose that regresses
+// silently in markup is exactly what belongs behind a test.
 
 import type { McpMode, RowAccess } from '../../../shared/types.js';
 
-/** The mode named by its effect — who serves MCP for the databases in this
- *  app — rather than by the setting's internal value. 'remote-only' says
- *  "remote servers only" because the app itself serves nothing in that mode;
- *  what it adds over 'off' is the operator's statement that something else
- *  does, which `servingNote` then shows per profile. */
+/** The answer to "does this app serve MCP", named by its effect rather than by
+ *  the setting's internal value.
+ *
+ *  The question is about this app alone. An earlier version asked *who* serves
+ *  and offered "remote servers only" as a third answer, which was a mistake in
+ *  two ways: the mode changed nothing, and answering "nobody" while a card
+ *  underneath reported a declared remote server was a contradiction the same
+ *  screen could print. What something else serves is reported by `servingNote`,
+ *  per profile, independently of this. */
 export function mcpModeLabel(mode: McpMode): string {
-  switch (mode) {
-    case 'local':
-      return 'This app (local)';
-    case 'remote-only':
-      return 'Remote servers only';
-    default:
-      return 'Nobody (off)';
-  }
+  return mode === 'local' ? 'Yes, one per profile' : 'No';
 }
 
 export type CardNote = { text: string; cls: string } | null;
 
 /** The declaration badge's text. Shared because it is rendered from two
- *  places — beside the app's own MCP badge under 'local', and on its own under
- *  'remote-only' — and two copies would drift. "(declared)" is not padding:
+ *  places — beside the app's own MCP badge when this app serves, and on its own
+ *  when it does not — and two copies would drift. "(declared)" is not padding:
  *  the app never contacted the remote server, so this is the operator's claim
- *  and must not read as a verified fact. */
+ *  and must not read as a verified fact. A declaration is valid with no URL at
+ *  all, so there is not even an address to have checked. */
 export const REMOTE_DECLARED = 'served remotely (declared)';
 
-/** What a profile card says about serving, given the mode and whether this
- *  profile declares a remote MCP server.
+/** What a profile card says about a remote server serving its database.
  *
- *  Only 'remote-only' says anything. That is what makes it distinguishable from
- *  'off', which is the whole point: no behaviour differs between the two, so
- *  the difference has to be the statement the operator made — declared, or
- *  explicitly not declared.
+ *  Only a declaration says anything, and it says it whatever this app's own mode
+ *  is. The two are independent facts: hiding the declaration while this app is
+ *  off would mean a card silently changes what it claims about someone else's
+ *  server when you flip a setting about ours.
  *
- *  'off' returns null on purpose, declaration or not. The header reads
- *  "Nobody (off)", and a card that answered "served remotely" underneath it
- *  would contradict the header on the same screen. Under 'off' the app makes no
- *  claim about MCP at all; the declaration is still visible in the profile's
- *  own edit form, and switching to 'remote-only' is what asks the app to report
- *  it. Under 'local' the card's own MCP row already reports the app's server,
- *  and the declaration rides beside it there.
+ *  A profile with no declaration says nothing, rather than "none declared". That
+ *  is the common case, and printing it on every card would make the quiet state
+ *  the loud one. The absence is also visible where it is set — the profile's own
+ *  edit form — which is where a reader goes to change it.
  *
- *  A declaration is the operator's statement, not something the app verified —
- *  hence "(declared)" in the text. */
-export function servingNote(mode: McpMode, declared: boolean): CardNote {
-  if (mode !== 'remote-only') return null;
-  return declared
-    ? { text: REMOTE_DECLARED, cls: 'remote' }
-    : { text: 'no serving server declared', cls: 'warn' };
+ *  Takes only the declaration, not the mode. It used to take both, because the
+ *  note existed to tell 'remote-only' apart from 'off'; with that mode gone the
+ *  mode is not part of the question. */
+export function servingNote(declared: boolean): CardNote {
+  return declared ? { text: REMOTE_DECLARED, cls: 'remote' } : null;
 }
 
 /** What row access is in force, what it costs, and where it is used.

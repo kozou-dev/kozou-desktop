@@ -83,27 +83,24 @@ test('local MCP lifecycle: default off, start, quit closes the port, restore, st
   // --- first launch: default off, explicit enable + start -------------------
   const first = await launch(userData);
   await expect(first.page.getByTestId('mcp-mode')).toHaveValue('off');
-  // The control names who serves, and the options do too — the setting's own
-  // values ('off' / 'remote-only') are not what an operator is asking.
-  await expect(first.page.getByTestId('mcp-mode')).toContainText('Nobody (off)');
-  await expect(first.page.getByTestId('mcp-mode')).toContainText('This app (local)');
-  await expect(first.page.getByTestId('mcp-mode')).toContainText('Remote servers only');
+  // The control answers whether THIS APP serves, and the options answer it too —
+  // the setting's own values are not what an operator is asking. There are two:
+  // a third ('remote-only') branched no behaviour and could not be told apart
+  // from 'off' by anything it did, so it is gone.
+  await expect(first.page.getByTestId('mcp-mode')).toContainText('No');
+  await expect(first.page.getByTestId('mcp-mode')).toContainText('Yes, one per profile');
+  await expect(first.page.locator('[data-testid="mcp-mode"] option')).toHaveCount(2);
+  // It must not answer for anyone else: "Nobody" was false the moment a profile
+  // declared a remote server.
+  await expect(first.page.getByTestId('mcp-mode')).not.toContainText('Nobody');
   await addProfile(first.page, 'alpha');
   // Off mode renders no MCP controls on the card.
   await expect(first.page.getByTestId('mcp-alpha')).toHaveCount(0);
 
-  // 'off' and 'remote servers only' used to be indistinguishable on the card:
-  // no behaviour branches on 'remote-only', and neither mode said anything for
-  // an undeclared profile. Under 'off' the app claims nothing at all — the
-  // header already reads "Nobody (off)" and a card answering underneath it
-  // would contradict that; under 'remote servers only' the absence of a
-  // declaration is itself stated. Visibility, not just text: a note rendered
-  // and then hidden by CSS would satisfy a text-only assertion.
-  await expect(first.page.getByTestId('serving-alpha')).toHaveCount(0);
-  await first.page.getByTestId('mcp-mode').selectOption('remote-only');
-  await expect(first.page.getByTestId('serving-alpha')).toBeVisible();
-  await expect(first.page.getByTestId('serving-alpha')).toHaveText('no serving server declared');
-  await first.page.getByTestId('mcp-mode').selectOption('off');
+  // A profile with no declaration says nothing about remote serving, in either
+  // mode — that is the common case, and stating the absence on every card would
+  // make the quiet state the loud one. What a declaration does say, and that it
+  // says it regardless of this app's mode, is asserted below.
   await expect(first.page.getByTestId('serving-alpha')).toHaveCount(0);
 
   await first.page.getByTestId('mcp-mode').selectOption('local');
@@ -170,16 +167,18 @@ test('duplicate warning: declared remote MCP on the same database blocks, overri
 
   await addProfile(page, 'declared', { remoteDeclared: true });
   await addProfile(page, 'target');
-  // A declared profile is where 'off' and 'remote servers only' could still
-  // read alike, so check that pair before touching the local mode: under 'off'
-  // the card says nothing even with a declaration stored, and the declaration
-  // reads as a declaration rather than as something the app confirmed.
-  await expect(page.getByTestId('serving-declared')).toHaveCount(0);
-  await page.getByTestId('mcp-mode').selectOption('remote-only');
+  // A declaration is a fact about someone else's server, so the card reports it
+  // while this app serves nothing — it does not stop being true because our own
+  // setting is off. Visibility, not just text: a note rendered and then hidden by
+  // CSS would satisfy a text-only assertion. And it reads as a declaration rather
+  // than as something the app confirmed (it never contacts the server, and a
+  // declaration is valid with no URL at all).
+  await expect(page.getByTestId('mcp-mode')).toHaveValue('off');
   await expect(page.getByTestId('serving-declared')).toBeVisible();
   await expect(page.getByTestId('serving-declared')).toHaveText('served remotely (declared)');
-  await page.getByTestId('mcp-mode').selectOption('off');
-  await expect(page.getByTestId('serving-declared')).toHaveCount(0);
+  // The undeclared profile stays quiet in the same mode, so the badge above is
+  // the declaration talking and not the mode.
+  await expect(page.getByTestId('serving-target')).toHaveCount(0);
 
   await page.getByTestId('mcp-mode').selectOption('local');
   // Under local the declaration rides beside the app's own MCP badge, in the
