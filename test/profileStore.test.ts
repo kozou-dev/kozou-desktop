@@ -99,6 +99,9 @@ describe('ProfileStore local MCP fields', () => {
     expect(JSON.parse(readFileSync(join(dir, 'profiles.json'), 'utf8')).mcpMode).toBe('local');
     expect(() => store.setMcpMode('on')).toThrow(/mcpMode/);
     expect(() => store.setMcpMode(true)).toThrow(/mcpMode/);
+    // The retired third mode is no longer settable — it permitted nothing and
+    // started nothing, so there is nothing for a caller to ask for.
+    expect(() => store.setMcpMode('remote-only')).toThrow(/mcpMode/);
   });
 
   it('degrades junk on-disk mcpMode to off instead of propagating it', () => {
@@ -109,6 +112,21 @@ describe('ProfileStore local MCP fields', () => {
     data.mcpMode = 'evil';
     writeFileSync(file, JSON.stringify(data));
     expect(store.mcpMode()).toBe('off');
+  });
+
+  it("reads an earlier build's remote-only as off and leaves it on disk", () => {
+    // The mode permitted no start, so reading it as 'off' preserves the
+    // behaviour the file already had. A read must not migrate the file: the
+    // format stays at version 1, and an older build reading it back would
+    // otherwise find its own value gone.
+    const { store, dir } = freshStore();
+    store.upsert({ name: 'a', ...base });
+    const file = join(dir, 'profiles.json');
+    const data = JSON.parse(readFileSync(file, 'utf8'));
+    data.mcpMode = 'remote-only';
+    writeFileSync(file, JSON.stringify(data));
+    expect(store.mcpMode()).toBe('off');
+    expect(JSON.parse(readFileSync(file, 'utf8')).mcpMode).toBe('remote-only');
   });
 
   it('allocates sticky ports from 3335 and unique capability paths', () => {

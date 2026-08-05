@@ -59,7 +59,8 @@ The app can also serve the same compiled semantics to AI clients on your
 machine, so you and an agent read one model instead of two. It is **off by
 default**, and read-only regardless of anything else you have opted into.
 
-1. Set the header's **MCP served by:** control to **This app (local)**.
+1. In **Settings**, tick **Allow profiles to serve MCP on loopback**. Ticking it
+   starts nothing — it lets a profile be started.
 2. On a profile card, click **start** — the badge becomes `MCP on :<port>`.
 3. Click **AI client config** and copy the form your client wants — the panel
    offers three.
@@ -97,9 +98,11 @@ opposite of what it is for. Its own configuration file launches local commands
 (stdio) rather than connecting to a URL. Reaching the hub from there needs a
 local stdio-to-HTTP bridge process; this build neither provides nor tests one.
 
-One server per profile, so several databases can be served at once — each
-under its own name, port and path. Which is the point: an agent gets every
-database you have added, from one place, without a server per database.
+One server per profile, so several databases can be served at once — each under
+its own name, port and path. What is in one place is the managing of them: you
+start and stop them here, and this app hands you the client config for each. Your
+client still lists them one by one. A single endpoint that routes to several
+databases is not what this builds.
 
 What it serves is the **describe surface only**: `list_tables`,
 `describe_table`, `list_views`, `describe_view`, `list_concepts`,
@@ -134,19 +137,31 @@ Worth knowing before you paste:
   sits at `Pending approval` until you approve it once inside `claude`. The
   copied command adds no `--scope`, so it lands in whatever scope your CLI
   defaults to — local at the time of writing, which connects immediately.
-- **Remote servers only** (the third mode) serves nothing locally. It exists for
-  databases already covered by a remote kozou server, which a profile can
-  *declare* — and that declaration is what makes the app warn you before
-  serving a duplicate of one. In that mode every card states its declaration or
-  the absence of one (`served remotely (declared)` / `no serving server
-  declared`), which is what distinguishes it from **Nobody (off)**: no
-  behaviour differs between the two, so the difference is a statement you made,
-  and the card is where it is said. Under **Nobody (off)** the app says nothing
-  about MCP at all, declaration or not — the header already says nobody serves,
-  and a card contradicting it on the same screen would be worse than a blank.
-  A declaration is never verified: the app does not contact that server, and
-  the word *declared* is there because what it reports is your setting, not a
-  reachability check.
+- **A database already served from elsewhere** can be marked as such on the
+  profile: *a remote MCP server already serves this database*. That declaration
+  does two things, and neither one depends on the permission above. Its card
+  carries `served remotely (declared)` whether or not this app is allowed to
+  serve — what you recorded is about another server, so our own setting does not
+  change it. And starting a local server for a database a declared remote one
+  appears to cover stops to warn you first: two servers could then answer the
+  same question differently, since this app does not reproduce a server's own
+  opt-ins. You can start past that warning, because the declaration is something
+  you told us and not something we checked: the app never contacts that server,
+  a declaration is valid with no URL at all, and a remote server that has since
+  stopped would otherwise leave you unable to start a local one without first
+  deleting the record saying it exists. The word *declared* is in the badge for
+  the same reason — it reports what you entered, not a reachability check.
+- **What the duplicate check actually compares** is host, port and database name
+  as the connection URL spells them (default port filled in, database name
+  percent-decoded). It is deliberately one-sided — a miss is accepted, a match
+  is meant to be reliable — so it resolves no DNS aliases and looks through no
+  pooler, and it skips the comparison altogether for a URL carrying `host`,
+  `hostaddr`, `port` or `dbname` in its query string rather than guess at what
+  such a URL resolves to. In one direction it is looser than "reliable"
+  suggests, which is worth knowing before you trust a match: `localhost`,
+  `127.0.0.1` and `[::1]` are treated as one host, so two *different* servers
+  bound separately to IPv4 and IPv6 on the same port, with the same database
+  name, count as the same database.
 
 ## Local unsigned build
 
@@ -173,9 +188,9 @@ no signing, notarization, auto-update, or published binaries are in scope.
 
 ## Security posture
 
-- **Read-only by default; write is a separate, opt-in surface**: introspection always runs inside a `READ ONLY` transaction, and so does every row read. Row browsing and row editing are off for every profile until you turn them on, per profile, through a dialog drawn by the app's main process (never by the UI, which can only ask). The introspection and MCP surfaces stay read-only regardless of that grant. What enforces the split is structural, and CI checks it (`scripts/check-treeshake.mjs`): the write path may only be *reachable* from the row-data worker's bundle — the introspection worker, the MCP server worker and the main process are each bundled and scanned for it; no source anywhere may name `@kozou/api`'s HTTP-server entry points; and no source outside the worker directory may import a database driver, so a hand-written statement is confined to the same process as the generated ones. Reachability, not absence: the packaged app ships `node_modules` whole, so the code is present in the artifact whether or not anything can call it. `READ ONLY` is the database's own enforcement of what PostgreSQL classifies as a write — a view or function that calls out to something external is beyond what any transaction mode can undo. The optional local MCP mode serves the describe tools only — the execution tool is neither advertised nor dispatchable, pinned by an integration test against a real database.
+- **Read-only by default; write is a separate, opt-in surface**: introspection always runs inside a `READ ONLY` transaction, and so does every row read. Row browsing and row editing are off for every profile until you turn them on, per profile, through a dialog drawn by the app's main process (never by the UI, which can only ask). The introspection and MCP surfaces stay read-only regardless of that grant. What enforces the split is structural, and CI checks it (`scripts/check-treeshake.mjs`): the write path may only be *reachable* from the row-data worker's bundle — the introspection worker, the MCP server worker and the main process are each bundled and scanned for it; no source anywhere may name `@kozou/api`'s HTTP-server entry points; and no source outside the worker directory may import a database driver, so a hand-written statement is confined to the same process as the generated ones. Reachability, not absence: the packaged app ships `node_modules` whole, so the code is present in the artifact whether or not anything can call it. `READ ONLY` is the database's own enforcement of what PostgreSQL classifies as a write — a view or function that calls out to something external is beyond what any transaction mode can undo. The optional local MCP hub serves the describe tools only — the execution tool is neither advertised nor dispatchable, pinned by an integration test against a real database.
 - **What a row-editing grant really costs**: for a profile you opted in to editing, a compromised renderer can write to that database with your stored credentials. That is the one genuinely new risk here, and the mitigations stop at "off by default", "per profile", and "the grant needs a native approval" — see `EGRESS.md` for why nothing stronger is available inside Electron's trust model.
-- **Zero egress, loopback-only serving**: outbound, the only network peer is your own database. No telemetry, no crash upload, no update checks, spellchecker disabled (CI-checked: `scripts/check-egress-static.mjs`). By default the app opens no server and no port; the opt-in local MCP mode (default off) listens on `127.0.0.1` only, behind a per-profile secret path and a DNS-rebinding guard — see `EGRESS.md` for the exact local exposure.
+- **Zero egress, loopback-only serving**: outbound, the only network peer is your own database. No telemetry, no crash upload, no update checks, spellchecker disabled (CI-checked: `scripts/check-egress-static.mjs`). By default the app opens no server and no port; the opt-in local MCP hub (which needs the app-wide permission, off by default, and then a per-profile start) listens on `127.0.0.1` only, behind a per-profile secret path and a DNS-rebinding guard — see `EGRESS.md` for the exact local exposure.
 - **Secrets**: database passwords are stored via Electron `safeStorage` (OS keychain-backed), passed to workers via environment only — never argv, logs, or config files. On Linux this additionally requires a real keyring backend: the `basic_text` fallback (a hardcoded key) is rejected rather than silently accepted.
 - **Least privilege**: connect with a minimal read role. On Supabase, do **not** use `service_role`/`postgres` (they bypass RLS).
 

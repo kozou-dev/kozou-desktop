@@ -54,12 +54,13 @@ Open-ended — a sentence each is plenty:
   annotation, or view didn't appear where you expected. (Foreign keys to
   schemas you didn't add to the profile are intentionally hidden; views that
   read from outside those schemas show as dashed "ghost" nodes.)
-- The **local MCP hub** (**MCP served by:** → **This app (local)**, then **start** on a card,
-  then **AI client config**) serves the same describe surface to your own AI
-  client, one server per profile — see the README for the steps. If you connect
-  it: did having every database you added reachable from one place beat running
-  a server per database yourself, and did anything about pasting the config or
-  keeping the app open get in the way?
+- The **local MCP hub** (**Settings** → tick **Allow profiles to serve MCP on
+  loopback**, then **start** on a card, then **AI client config**) serves the
+  same describe surface to your own AI client, one server per profile — see the
+  README for the steps. If you connect it: did starting, stopping and
+  configuring them from one place beat running a server per database yourself
+  (your client still lists them one by one), and did anything about pasting the
+  config or keeping the app open get in the way?
 - The **AI view** tab shows the payload an AI agent receives from the MCP
   describe tools of a *default-configured* kozou server (server-side opt-ins
   like RPC exposure config or privilege-aware annotations are not reproduced

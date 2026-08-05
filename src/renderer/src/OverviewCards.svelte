@@ -9,7 +9,7 @@
   } from '../../shared/types';
   import { displayConnection } from '../../shared/url';
   import { computeCoverage } from './lib/coverage';
-  import { REMOTE_DECLARED, rowAccessNote, servingNote } from './lib/statusCopy';
+  import { MCP_NOT_ALLOWED, rowAccessNote, servingNote } from './lib/statusCopy';
 
   let {
     profiles,
@@ -17,6 +17,7 @@
     selected,
     inspecting,
     mcpMode,
+    mcpKnown,
     mcp,
     duplicatePending,
     rowAccessPending,
@@ -36,6 +37,11 @@
     selected: string | null;
     inspecting: string | null;
     mcpMode: McpMode;
+    /** False until both the permission and the registry have been read. While
+     *  it is false no card says anything about its own MCP server: the
+     *  placeholder permission would read as "not allowed" and the empty
+     *  registry as "off", and neither has been established. */
+    mcpKnown: boolean;
     mcp: Record<string, McpStatusEntry>;
     duplicatePending: { profile: string; duplicates: string[] } | null;
     rowAccessPending: string | null;
@@ -109,6 +115,7 @@
     {@const result = results[p.name]}
     {@const cov = result?.ok ? computeCoverage(result.context as ContextView) : null}
     {@const ra = rowAccessBadge(p.rowAccess)}
+    {@const decl = servingNote(p.remoteMcp?.declared === true)}
     <button
       class="card"
       class:active={selected === p.name}
@@ -203,7 +210,12 @@
            place rows appear are both things an operator otherwise discovers
            only after granting. -->
       <div class="row ra-note" data-testid={`rowaccess-note-${p.name}`}>{rowAccessNote(p.rowAccess)}</div>
-      {#if mcpMode === 'local'}
+      <!-- The card's own MCP row is present whatever the permission says. It
+           used to appear only under 'local', so a reader who had not opened the
+           permission had no way to learn that per-profile MCP existed at all —
+           the same shape of defect as an opt-in whose control is invisible until
+           you already know about it. -->
+      {#if mcpKnown && mcpMode === 'local'}
         {@const st = mcp[p.name]}
         {@const badge = mcpBadge(st)}
         <div class="row mcp" data-testid={`mcp-${p.name}`}>
@@ -251,16 +263,24 @@
               onkeydown={(e) => e.key === 'Enter' && act(e, () => onmcpconfig(p.name))}>AI client config</span
             >
           {/if}
-          {#if p.remoteMcp?.declared}
-            <span class="mcp-badge remote" title={p.remoteMcp.url ?? ''}>{REMOTE_DECLARED}</span>
-          {/if}
         </div>
         {#if st?.error && (st.status === 'error' || st.status === 'error-port-busy' || st.status === 'stopped-crashed')}
           <div class="row mcp-error" data-testid={`mcp-error-${p.name}`}>{st.error}</div>
         {/if}
         {#if duplicatePending?.profile === p.name}
           <div class="row mcp-dup" data-testid={`mcp-dup-${p.name}`}>
-            <span>same database as declared remote MCP: {duplicatePending.duplicates.join(', ')}</span>
+            <!-- Say what the collision risks, not just that there is one — and
+                 stay inside what is known. About our own side we can be
+                 definite: our port is ours, our reads run read-only, and we
+                 cannot dispatch an execution tool. About the declared server we
+                 know nothing at all — not its port, not its options, not
+                 whether it is even up, since a declaration is never contacted
+                 and needs no URL. So the cost is stated as a possibility. -->
+            <span
+              >same database as declared remote MCP: {duplicatePending.duplicates.join(', ')}. Two
+              servers could then answer the same question differently — this app does not reproduce a
+              server's own opt-ins (RPC exposure, privilege-aware annotations).</span
+            >
             <span
               class="linkish"
               role="button"
@@ -279,17 +299,23 @@
             >
           </div>
         {/if}
-      {:else}
-        <!-- Not 'local', so the app serves nothing for this profile. Whether
-             anything else does is a statement the operator either made or did
-             not, and both cases are said out loud: a blank card here is what
-             made 'off' and 'remote servers only' look identical. -->
-        {@const note = servingNote(mcpMode, p.remoteMcp?.declared === true)}
-        {#if note !== null}
-          <div class="row mcp" data-testid={`serving-${p.name}`}>
-            <span class={`mcp-badge ${note.cls}`} title={p.remoteMcp?.url ?? ''}>{note.text}</span>
-          </div>
-        {/if}
+      {:else if mcpKnown}
+        <!-- No profile may run a server, so this card's own MCP row says that
+             and nothing else. It states the permission it is subject to, not a
+             state its server is in — there is no server to be in one. -->
+        <div class="row mcp" data-testid={`mcp-${p.name}`}>
+          <span class="mcp-badge" data-testid={`mcp-badge-${p.name}`}>{MCP_NOT_ALLOWED}</span>
+        </div>
+      {/if}
+      <!-- Outside the permission branches on purpose: what the operator recorded
+           about someone else's server is true whether or not this app may serve,
+           and rendering it from one place is what stops the two branches from
+           saying different things about the same declaration. The app never
+           contacts that server, so nothing here reports its condition. -->
+      {#if decl !== null}
+        <div class="row mcp" data-testid={`serving-${p.name}`}>
+          <span class={`mcp-badge ${decl.cls}`} title={p.remoteMcp?.url ?? ''}>{decl.text}</span>
+        </div>
       {/if}
     </button>
   {/each}

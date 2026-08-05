@@ -16,7 +16,7 @@
   import SemanticMap from './SemanticMap.svelte';
   import { buildMcpClientSnippets } from '../../shared/mcpSnippet';
   import type { CommentDraft } from './lib/commentEmit';
-  import { mcpModeLabel } from './lib/statusCopy';
+  import { MCP_ALLOW_LABEL, MCP_ALLOW_NOTE, mcpStopWarning } from './lib/statusCopy';
 
   const api = window.kozouDesktop;
 
@@ -27,6 +27,7 @@
   let inspecting = $state<string | null>(null);
   let formError = $state<string | null>(null);
   let showAddForm = $state(false);
+  let showSettings = $state(false);
   // A profile's identity is not its name across delete/re-create or a
   // URL-changing re-save: bump a per-name token on every mutation and drop
   // in-flight inspect results whose token no longer matches.
@@ -62,15 +63,39 @@
   // layer for that database.
   let fRemoteTouched = $state(false);
 
-  // Local MCP serving state (live registry pushed from main; the store's
-  // allocation/autoStart ride the same entries).
+  // Local MCP: the app-wide permission (owned by the Settings panel) and the
+  // live per-profile registry pushed from main (the store's allocation and
+  // autoStart ride the same entries).
+  //
+  // `mcpKnown` is false until BOTH have been read, and the 'off' below is a
+  // placeholder rather than an answer. Either value alone lets a card state
+  // something it cannot support: the permission without the registry cannot say
+  // what is running, and the registry without the permission cannot say whether
+  // a start is even allowed. Nothing that speaks for either is rendered while
+  // this is false — not the card rows, and not the Settings control, whose
+  // unchecked box would read as "not allowed" before anything was read.
   let mcpMode = $state<McpMode>('off');
   let mcp = $state<Record<string, McpStatusEntry>>({});
+  let mcpKnown = $state(false);
   let duplicatePending = $state<{ profile: string; duplicates: string[] } | null>(null);
   // A native approval dialog is modal to the window, so at most one row-access
   // request can be in flight; the name is held to show which card is waiting.
   let rowAccessPending = $state<string | null>(null);
   let pendingMode = $state<McpMode | null>(null);
+  // True from the click that writes the permission until the write has settled.
+  let applyingMode = $state(false);
+  // Bumped when the checkbox has to be rebuilt from `mcpMode`: either its DOM
+  // state has diverged from the permission in force — the one case Svelte cannot
+  // repair on its own, since the box moved and `mcpMode` did not, leaving
+  // nothing for `checked={...}` to re-apply — or a confirmation it opened has
+  // closed and the focus has to come back to something.
+  let modeControlEpoch = $state(0);
+  // Whether the next rebuild should take the focus. Set only by the paths that
+  // are a response to the operator's own click, and cleared by the action that
+  // consumes it, so reopening the panel later cannot inherit a stale intent.
+  // Not $state: the action reads it while the rebuild is applied, and nothing
+  // renders from it.
+  let refocusMode = false;
   let snippetFor = $state<string | null>(null);
 
   const runningCount = $derived(
@@ -89,40 +114,106 @@
     mcp = next;
   }
 
+  /** Both reads land together or neither does: `mcpKnown` gates every surface
+   *  that speaks for the permission or for what is running, so flipping it
+   *  after only one of the two had arrived would re-open the gap it exists to
+   *  close. */
   async function initMcp(): Promise<void> {
     try {
-      mcpMode = await api.mcpModeGet();
-      applyMcpStatus(await api.mcpStatus());
+      const mode = await api.mcpModeGet();
+      const status = await api.mcpStatus();
+      mcpMode = mode;
+      applyMcpStatus(status);
+      mcpKnown = true;
     } catch (err) {
       formError = message(err);
     }
   }
   api.onMcpStatusChanged(applyMcpStatus);
 
-  /** Mode switch: leaving 'local' with live servers asks first (they all
-   *  stop; per-profile autoStart intents survive for the next launch).
-   *  Re-picking the current mode acts as an undo of a pending confirm. */
+  /** Withdrawing the permission while servers are up asks first (they are asked
+   *  to stop; per-profile autoStart intents survive for the next launch). */
   async function requestMode(next: McpMode): Promise<void> {
     if (next === mcpMode) {
+      // Reachable only if the box was already out of step with the permission
+      // in force — the control is disabled while a confirmation is open, so
+      // this is a resync rather than an undo.
       pendingMode = null;
+      refocusMode = true;
+      modeControlEpoch += 1;
       return;
     }
     if (mcpMode === 'local' && runningCount > 0) {
       pendingMode = next;
+      // The box has moved but nothing has been written yet, so it is showing an
+      // answer that is not in force. Rebuild it from `mcpMode`: while the
+      // confirmation is open the old permission still stands, cards can still
+      // start servers, and cancelling leaves everything as it was. The focus
+      // goes to the prompt instead of coming back here — it is what the
+      // operator now has to answer.
+      refocusMode = false;
+      modeControlEpoch += 1;
       return;
     }
     await applyMode(next);
   }
 
+  /** Writes the permission and leaves the control showing whatever is in force
+   *  afterwards. Two reasons to rebuild: the write did not land on the value
+   *  that was asked for (the box is asserting a permission the store refused),
+   *  or a confirmation was open and its buttons are about to be removed with the
+   *  focus still on one of them. A plain successful toggle rebuilds nothing —
+   *  `mcpMode` moved, so Svelte re-applies `checked` and the focus never left.
+   *
+   *  Clearing `pendingMode` first (as an earlier version did) was the bug: the
+   *  rebuild was keyed on the value being cleared, so a failed write left the
+   *  box asserting the refused permission with nothing to trigger a repair. */
   async function applyMode(next: McpMode): Promise<void> {
-    pendingMode = null;
+    const wasConfirming = pendingMode !== null;
+    applyingMode = true;
     formError = null;
     try {
       mcpMode = await api.mcpModeSet(next);
       applyMcpStatus(await api.mcpStatus());
     } catch (err) {
       formError = message(err);
+    } finally {
+      applyingMode = false;
+      pendingMode = null;
+      if (wasConfirming || mcpMode !== next) {
+        refocusMode = true;
+        modeControlEpoch += 1;
+      }
     }
+  }
+
+  /** Cancelling writes nothing. The box already shows the permission in force
+   *  (it was rebuilt when the confirmation opened), so this closes the prompt
+   *  and hands the focus back to the control. */
+  function cancelMode(): void {
+    pendingMode = null;
+    refocusMode = true;
+    modeControlEpoch += 1;
+  }
+
+  /** The `{#key}` rebuild throws the control away, and with it the focus and
+   *  assistive-technology context of whoever was operating it. Every rebuild
+   *  that answers the operator's own click puts the focus back; the first render
+   *  and a panel simply being reopened do not, because nothing was operated and
+   *  stealing the focus from the page would be wrong. */
+  function refocusControl(node: HTMLElement): void {
+    if (!refocusMode) return;
+    refocusMode = false;
+    node.focus();
+  }
+
+  /** Focus the confirmation's primary button as it appears. The prompt is
+   *  announced by `role="alert"` and does not trap the focus: it is not modal
+   *  (the cards behind it stay live, which is deliberate — a server can still
+   *  be stopped by hand while it is open), so this places the focus rather than
+   *  holding it. */
+  function focusOnMount(node: HTMLElement): void {
+    node.focus();
   }
 
   async function mcpStart(name: string, override = false): Promise<void> {
@@ -400,37 +491,66 @@
 <main>
   <header class="top">
     <h1>kozou Desktop <span class="tag">Semantic Map</span></h1>
+    <!-- Nothing here speaks for MCP. The permission lived here as an answered
+         question ("MCP served by:", then "This app may serve MCP:") above cards
+         reporting per-profile state, and both readings collapsed into "so is
+         MCP running?" — which the permission cannot answer, because it counts
+         nothing. It is a setting, so it is in Settings; what is running is said
+         by the card whose server it is, and no aggregate is stated here (that
+         would put the same claim on two surfaces again). -->
     <div class="top-actions">
-      <!-- Named by effect, not by setting: the question an operator is asking
-           is who serves MCP for these databases. -->
-      <label class="mcp-mode">
-        MCP served by:
-        <select
-          data-testid="mcp-mode"
-          value={pendingMode ?? mcpMode}
-          onchange={(e) => void requestMode(e.currentTarget.value as McpMode)}
-        >
-          <option value="off">{mcpModeLabel('off')}</option>
-          <option value="local">{mcpModeLabel('local')}</option>
-          <option value="remote-only">{mcpModeLabel('remote-only')}</option>
-        </select>
-      </label>
-      {#if pendingMode !== null}
-        <span class="mode-confirm" data-testid="mcp-mode-confirm">
-          stop {runningCount} running server{runningCount === 1 ? '' : 's'} and switch to "{mcpModeLabel(
-            pendingMode,
-          )}"?
-          <button data-testid="mcp-mode-confirm-yes" onclick={() => pendingMode !== null && void applyMode(pendingMode)}
-            >stop &amp; switch</button
-          >
-          <button data-testid="mcp-mode-confirm-no" onclick={() => (pendingMode = null)}>cancel</button>
-        </span>
-      {/if}
+      <button class="add" data-testid="settings-toggle" onclick={() => (showSettings = !showSettings)}>
+        {showSettings ? 'Close' : 'Settings'}
+      </button>
       <button class="add" data-testid="add-toggle" onclick={() => (showAddForm = !showAddForm)}>
         {showAddForm ? 'Close' : '+ Add database'}
       </button>
     </div>
   </header>
+
+  {#if showSettings}
+    <section class="settings" data-testid="settings">
+      <strong>MCP</strong>
+      {#if mcpKnown}
+        <!-- Rebuilt whenever the box has diverged from the permission in force;
+             see `modeControlEpoch`. Keying is what makes "always show what is in
+             force" possible at all: after a click Svelte sees an unchanged
+             `mcpMode` and has nothing to re-apply. -->
+        {#key modeControlEpoch}
+          <label class="mcp-allow">
+            <input
+              type="checkbox"
+              data-testid="mcp-allow"
+              checked={mcpMode === 'local'}
+              disabled={pendingMode !== null || applyingMode}
+              onchange={(e) => void requestMode(e.currentTarget.checked ? 'local' : 'off')}
+              use:refocusControl
+            />
+            {MCP_ALLOW_LABEL}
+          </label>
+        {/key}
+        <p class="form-hint">{MCP_ALLOW_NOTE}</p>
+        {#if pendingMode !== null}
+          <!-- Says what is affected and asks; it does not promise the servers
+               will be gone (see `mcpStopWarning`). "turn it off" is the part
+               this can guarantee: the permission is written and takes effect. -->
+          <div class="mode-confirm" role="alert" data-testid="mcp-mode-confirm">
+            <span>{mcpStopWarning(runningCount)}</span>
+            <button
+              data-testid="mcp-mode-confirm-yes"
+              use:focusOnMount
+              onclick={() => pendingMode !== null && void applyMode(pendingMode)}>turn it off</button
+            >
+            <button data-testid="mcp-mode-confirm-no" onclick={cancelMode}>cancel</button>
+          </div>
+        {/if}
+      {:else}
+        <!-- The stored permission has not been read yet, and an unchecked box
+             would answer "not allowed" on its behalf. -->
+        <p class="form-hint" data-testid="mcp-allow-unknown">Reading the stored setting...</p>
+      {/if}
+    </section>
+  {/if}
 
   {#if showAddForm}
     <form onsubmit={save}>
@@ -469,6 +589,7 @@
     selected={selectedProfile}
     {inspecting}
     {mcpMode}
+    {mcpKnown}
     {mcp}
     {duplicatePending}
     {rowAccessPending}
@@ -604,19 +725,25 @@
     align-items: center;
     gap: 0.6rem;
   }
-  .mcp-mode {
-    font-size: 0.8rem;
+  .settings {
+    border: 1px solid #ddd;
+    border-radius: 10px;
+    background: #fff;
+    padding: 0.6rem 0.8rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    align-items: flex-start;
+  }
+  .settings strong {
+    font-size: 0.85rem;
+  }
+  .mcp-allow {
+    font-size: 0.85rem;
     color: #444;
     display: flex;
     align-items: center;
-    gap: 0.3rem;
-  }
-  .mcp-mode select {
-    padding: 0.25rem 0.4rem;
-    border: 1px solid #ccc;
-    border-radius: 6px;
-    background: #fff;
-    font: inherit;
+    gap: 0.4rem;
   }
   .mode-confirm {
     font-size: 0.78rem;

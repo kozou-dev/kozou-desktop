@@ -1,69 +1,82 @@
-// The words the app uses for two states an operator has to be able to read off
-// the screen without opening anything: who serves MCP, and what row access is
-// in force.
+// The words the app uses for three things an operator has to be able to read
+// off the screen without opening anything: whether profiles may serve MCP at
+// all, what a profile's own MCP server is doing, and what row access is in
+// force.
 //
-// Both were legible only to someone who already knew the design. The MCP mode
-// was a bare "MCP" label over Off / Local / Remote only, which named the
-// setting rather than its effect — and because no behaviour branches on
-// 'remote-only' (every branch is `=== 'local'` / `!== 'local'`), that mode was
-// indistinguishable from 'off' on screen. Row access showed a level badge and
-// an "enable browsing" link, and said nothing about what the approval covers,
-// that editing is a second approval, or where rows then appear.
+// One surface, one claim — learned the hard way. The permission used to be
+// answered in the header, above cards reporting per-profile state, and the
+// header's answer was read as state: "MCP served by: Nobody (off)" and its
+// replacement "This app may serve MCP: No" both invited "so is MCP running?",
+// which the value cannot answer because it counts nothing. Rewording it a third
+// time was not the fix. The permission now lives in Settings, where it is asked
+// as a permission and nothing in the header speaks for it; what is running is
+// said only by the card whose server it is.
 //
-// Kept here as pure functions so the copy is unit-testable: the claim that two
-// modes are distinguishable is exactly the kind of thing that regresses
-// silently in markup.
+// Kept here as pure functions and constants so the copy is unit-testable: a
+// claim drifting back onto the wrong surface is exactly the kind of thing that
+// regresses silently in markup.
 
-import type { McpMode, RowAccess } from '../../../shared/types.js';
+import type { RowAccess } from '../../../shared/types.js';
 
-/** The mode named by its effect — who serves MCP for the databases in this
- *  app — rather than by the setting's internal value. 'remote-only' says
- *  "remote servers only" because the app itself serves nothing in that mode;
- *  what it adds over 'off' is the operator's statement that something else
- *  does, which `servingNote` then shows per profile. */
-export function mcpModeLabel(mode: McpMode): string {
-  switch (mode) {
-    case 'local':
-      return 'This app (local)';
-    case 'remote-only':
-      return 'Remote servers only';
-    default:
-      return 'Nobody (off)';
-  }
+/** The Settings control's label. It names what the permission decides — that a
+ *  profile is *allowed* to start a server — and deliberately not what any
+ *  server is doing: a profile can be stopped, starting or up, and this label
+ *  reads the same in all three cases. */
+export const MCP_ALLOW_LABEL = 'Allow profiles to serve MCP on loopback';
+
+/** The one line under that control, which says what switching it on does NOT
+ *  do — the part a reader gets wrong. Turning it on serves nothing; a profile
+ *  starts its own server, one at a time. The second sentence is what turning it
+ *  off means, in the terms this app can keep: the servers are asked to stop,
+ *  not made to (see `mcpStopWarning`). */
+export const MCP_ALLOW_NOTE =
+  "Nothing listens until you start a profile's server, one profile at a time. Turning this off asks every server that is up to stop, and refuses further starts.";
+
+/** What a card says about its own MCP server while no profile may run one.
+ *  "not allowed" rather than "off": 'off' reads as a state a server is in, and
+ *  this row is about a server that cannot be started yet. It names the surface
+ *  that owns the permission because the card cannot change it. */
+export const MCP_NOT_ALLOWED = 'MCP not allowed - see Settings';
+
+/** The confirmation shown when the permission is withdrawn while servers are
+ *  up. Two things it deliberately does not say, both because they would be
+ *  false:
+ *
+ *    * that the servers will stop. `UtilityProcess.kill()`'s failure result is
+ *      ignored and the wait gives up after three seconds, so a child that
+ *      refuses to die leaves a listener behind. They are *asked*.
+ *    * that they are all "running". The count its caller passes includes
+ *      'starting' — a server whose listener has not been confirmed yet — so
+ *      naming only the confirmed ones would undercount what the click affects.
+ *      The word follows the count rather than the count following the word. */
+export function mcpStopWarning(count: number): string {
+  return `turn this off? ${count} server${count === 1 ? '' : 's'} running or starting will be asked to stop.`;
 }
 
 export type CardNote = { text: string; cls: string } | null;
 
-/** The declaration badge's text. Shared because it is rendered from two
- *  places — beside the app's own MCP badge under 'local', and on its own under
- *  'remote-only' — and two copies would drift. "(declared)" is not padding:
- *  the app never contacted the remote server, so this is the operator's claim
- *  and must not read as a verified fact. */
+/** The declaration badge's text. "(declared)" is not padding: the app never
+ *  contacted that server, so this reports what the operator recorded and must
+ *  not read as something this app checked. A declaration is valid with no URL
+ *  at all, so there is not even an address to have checked. */
 export const REMOTE_DECLARED = 'served remotely (declared)';
 
-/** What a profile card says about serving, given the mode and whether this
- *  profile declares a remote MCP server.
+/** What a profile card says about a remote server serving its database.
  *
- *  Only 'remote-only' says anything. That is what makes it distinguishable from
- *  'off', which is the whole point: no behaviour differs between the two, so
- *  the difference has to be the statement the operator made — declared, or
- *  explicitly not declared.
+ *  Mode-independent by construction — it takes the declaration and nothing
+ *  else. What something else serves does not stop being what the operator
+ *  recorded when this app is not allowed to serve, and taking no mode argument
+ *  is what keeps that from being re-decided per branch: the badge used to be
+ *  rendered from two places under two modes, which is how the app ended up
+ *  saying different things about the same declaration depending on a setting
+ *  that has nothing to do with it.
  *
- *  'off' returns null on purpose, declaration or not. The header reads
- *  "Nobody (off)", and a card that answered "served remotely" underneath it
- *  would contradict the header on the same screen. Under 'off' the app makes no
- *  claim about MCP at all; the declaration is still visible in the profile's
- *  own edit form, and switching to 'remote-only' is what asks the app to report
- *  it. Under 'local' the card's own MCP row already reports the app's server,
- *  and the declaration rides beside it there.
- *
- *  A declaration is the operator's statement, not something the app verified —
- *  hence "(declared)" in the text. */
-export function servingNote(mode: McpMode, declared: boolean): CardNote {
-  if (mode !== 'remote-only') return null;
-  return declared
-    ? { text: REMOTE_DECLARED, cls: 'remote' }
-    : { text: 'no serving server declared', cls: 'warn' };
+ *  No declaration returns null, because silence is not a claim. Saying "no
+ *  serving server declared" made the card speak about a database it knows
+ *  nothing about: an operator not having recorded anything is not evidence that
+ *  nothing serves it. */
+export function servingNote(declared: boolean): CardNote {
+  return declared ? { text: REMOTE_DECLARED, cls: 'remote' } : null;
 }
 
 /** What row access is in force, what it costs, and where it is used.
