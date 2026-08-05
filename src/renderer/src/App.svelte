@@ -77,6 +77,9 @@
   let mcpMode = $state<McpMode>('off');
   let mcp = $state<Record<string, McpStatusEntry>>({});
   let mcpKnown = $state(false);
+  // Distinct from `!mcpKnown`: that one covers "not read yet" as well, and the
+  // two need different words on screen.
+  let mcpReadFailed = $state(false);
   let duplicatePending = $state<{ profile: string; duplicates: string[] } | null>(null);
   // A native approval dialog is modal to the window, so at most one row-access
   // request can be in flight; the name is held to show which card is waiting.
@@ -91,10 +94,12 @@
   // closed and the focus has to come back to something.
   let modeControlEpoch = $state(0);
   // Whether the next rebuild should take the focus. Set only by the paths that
-  // are a response to the operator's own click, and cleared by the action that
-  // consumes it, so reopening the panel later cannot inherit a stale intent.
-  // Not $state: the action reads it while the rebuild is applied, and nothing
-  // renders from it.
+  // are a response to the operator's own click, and only while the panel
+  // holding the control is open — an intent recorded while it is closed is
+  // never consumed, and would then fire on whatever mount came next, taking the
+  // focus the moment the panel was reopened. Cleared by the action that consumes
+  // it and by closing the panel. Not $state: the action reads it while the
+  // rebuild is applied, and nothing renders from it.
   let refocusMode = false;
   let snippetFor = $state<string | null>(null);
 
@@ -117,8 +122,14 @@
   /** Both reads land together or neither does: `mcpKnown` gates every surface
    *  that speaks for the permission or for what is running, so flipping it
    *  after only one of the two had arrived would re-open the gap it exists to
-   *  close. */
+   *  close.
+   *
+   *  A failure is its own state rather than a longer wait. "Reading the stored
+   *  setting..." left up after the read has already failed is a false sentence
+   *  of exactly the kind this screen exists to avoid, and there was nothing to
+   *  retry with. */
   async function initMcp(): Promise<void> {
+    mcpReadFailed = false;
     try {
       const mode = await api.mcpModeGet();
       const status = await api.mcpStatus();
@@ -126,6 +137,7 @@
       applyMcpStatus(status);
       mcpKnown = true;
     } catch (err) {
+      mcpReadFailed = true;
       formError = message(err);
     }
   }
@@ -139,7 +151,7 @@
       // in force — the control is disabled while a confirmation is open, so
       // this is a resync rather than an undo.
       pendingMode = null;
-      refocusMode = true;
+      refocusMode = showSettings;
       modeControlEpoch += 1;
       return;
     }
@@ -181,7 +193,10 @@
       applyingMode = false;
       pendingMode = null;
       if (wasConfirming || mcpMode !== next) {
-        refocusMode = true;
+        // Only if the control is on screen to receive it: the write can settle
+        // after the panel was closed, and an intent left set then would fire on
+        // the next open.
+        refocusMode = showSettings;
         modeControlEpoch += 1;
       }
     }
@@ -192,8 +207,15 @@
    *  and hands the focus back to the control. */
   function cancelMode(): void {
     pendingMode = null;
-    refocusMode = true;
+    refocusMode = showSettings;
     modeControlEpoch += 1;
+  }
+
+  /** Closing the panel drops any focus intent with it. The control it named is
+   *  gone, and the operator's next click was on the toggle, not on it. */
+  function toggleSettings(): void {
+    showSettings = !showSettings;
+    if (!showSettings) refocusMode = false;
   }
 
   /** The `{#key}` rebuild throws the control away, and with it the focus and
@@ -499,7 +521,7 @@
          by the card whose server it is, and no aggregate is stated here (that
          would put the same claim on two surfaces again). -->
     <div class="top-actions">
-      <button class="add" data-testid="settings-toggle" onclick={() => (showSettings = !showSettings)}>
+      <button class="add" data-testid="settings-toggle" onclick={toggleSettings}>
         {showSettings ? 'Close' : 'Settings'}
       </button>
       <button class="add" data-testid="add-toggle" onclick={() => (showAddForm = !showAddForm)}>
@@ -513,9 +535,14 @@
       <strong>MCP</strong>
       {#if mcpKnown}
         <!-- Rebuilt whenever the box has diverged from the permission in force;
-             see `modeControlEpoch`. Keying is what makes "always show what is in
-             force" possible at all: after a click Svelte sees an unchanged
-             `mcpMode` and has nothing to re-apply. -->
+             see `modeControlEpoch`. Keying is what makes the repair possible at
+             all: after a click Svelte sees an unchanged `mcpMode` and has
+             nothing to re-apply. Note what this does NOT claim — while a
+             straight toggle is being written the box holds the value that was
+             clicked (disabled), because that value is the one about to be in
+             force; it is rebuilt from `mcpMode` only if the write does not land
+             there. The confirmation path is the one that shows the old
+             permission throughout, and it has to: the servers are still up. -->
         {#key modeControlEpoch}
           <label class="mcp-allow">
             <input
@@ -544,6 +571,14 @@
             <button data-testid="mcp-mode-confirm-no" onclick={cancelMode}>cancel</button>
           </div>
         {/if}
+      {:else if mcpReadFailed}
+        <!-- Neither the control nor a claim of progress: the read is over and it
+             failed, so the only honest things here are that it failed and a way
+             to ask again. The reason is in the error line above. -->
+        <p class="form-hint" data-testid="mcp-allow-failed">
+          Could not read the stored setting, so this app cannot say whether profiles may serve MCP.
+          <button data-testid="mcp-allow-retry" onclick={() => void initMcp()}>try again</button>
+        </p>
       {:else}
         <!-- The stored permission has not been read yet, and an unchecked box
              would answer "not allowed" on its behalf. -->

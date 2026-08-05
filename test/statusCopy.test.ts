@@ -43,6 +43,11 @@ describe('MCP permission copy', () => {
     expect(MCP_ALLOW_LABEL).toMatch(/\ballow\b/i);
     expect(MCP_ALLOW_LABEL).toMatch(/\bto serve\b/i);
     expect(MCP_ALLOW_LABEL).not.toMatch(/\bserves\b|\bserving\b|running|active|live|listening/i);
+    // Where it serves is part of what is being permitted, and the bind is fixed
+    // to 127.0.0.1 in main. Without this, "Allow profiles to serve MCP on any
+    // interface" satisfies every assertion above while promising something the
+    // code refuses to do.
+    expect(MCP_ALLOW_LABEL).toMatch(/\bloopback\b/i);
   });
 
   it('says that switching it on serves nothing by itself', () => {
@@ -65,12 +70,25 @@ describe('MCP permission copy', () => {
     expect(MCP_ALLOW_NOTE).not.toMatch(/is (now )?(running|serving|listening)/i);
   });
 
+  it('never turns "asked to stop" into a guarantee', () => {
+    // The four assertions above are all satisfied by appending a false promise
+    // ("Servers stop within three seconds."), which is what a deny-list has to
+    // catch. Residual hole, stated rather than assumed: a deny-list can be
+    // worded around, and only an exact-prose assertion closes that. This pins
+    // the wordings that were actually reachable from the true sentence.
+    expect(MCP_ALLOW_NOTE).not.toMatch(/within \w+ seconds?|guarantee|terminat|will stop|are stopped|shuts? down/i);
+  });
+
   it("names the permission on a card that cannot change it, without calling it a server state", () => {
     // 'MCP off' would read as a state the server is in; there is no server.
     expect(MCP_NOT_ALLOWED).toMatch(/not allowed/i);
     expect(MCP_NOT_ALLOWED).not.toMatch(/\boff\b|stopped|crashed/i);
     // A card cannot grant the permission, so it points at what can.
     expect(MCP_NOT_ALLOWED).toMatch(/settings/i);
+    // The permission is app-wide. Sitting on a card invites scoping it to that
+    // card: "MCP not allowed for this database - see Settings" passes everything
+    // above and tells the reader the setting is per database, which it is not.
+    expect(MCP_NOT_ALLOWED).not.toMatch(/this database|this profile|for this\b|here\b/i);
   });
 });
 
@@ -82,7 +100,13 @@ describe('mcpStopWarning', () => {
     for (const n of [1, 2, 7]) {
       const text = mcpStopWarning(n);
       expect(text).toMatch(/will be asked to stop/i);
+      // The second pattern is the one a rewrite reaches for: keeping "will be
+      // asked to stop" and appending the guarantee anyway ("...and they will
+      // then terminate") satisfies everything else here. Residual hole, stated
+      // rather than assumed: a deny-list can be worded around, and only an
+      // exact-prose assertion closes it.
       expect(text).not.toMatch(/will stop|stops (them|it)|are stopped|and stop\b/i);
+      expect(text).not.toMatch(/terminat|shuts? down|be killed|guarantee|within \w+ seconds?/i);
     }
   });
 
@@ -119,12 +143,21 @@ describe('servingNote', () => {
     expect(servingNote(false)).toBeNull();
   });
 
-  it('takes no mode, so the permission cannot change what it says', () => {
+  it('ignores a mode even when one is forced in', () => {
     // Structural, not textual: the badge used to be rendered from two branches
     // under two modes, which is how the app ended up saying different things
-    // about the same declaration depending on a setting unrelated to it. A
-    // second parameter is the regression, so pin the arity.
-    expect(servingNote.length).toBe(1);
+    // about the same declaration depending on a setting unrelated to it.
+    //
+    // Asserted behaviourally rather than by arity. `expect(servingNote.length)`
+    // was the obvious guard and it is defeated by a default: adding
+    // `(declared, mode = 'off')` and branching on `mode` leaves `.length === 1`,
+    // so the guard passes while the regression is back. Forcing a mode through
+    // the call catches that, because a branch on it changes the result.
+    const forced = servingNote as unknown as (declared: boolean, mode?: unknown) => unknown;
+    for (const mode of ['off', 'local', 'remote-only', undefined]) {
+      expect(forced(true, mode)).toEqual(servingNote(true));
+      expect(forced(false, mode)).toEqual(servingNote(false));
+    }
   });
 });
 

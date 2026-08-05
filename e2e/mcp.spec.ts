@@ -103,7 +103,12 @@ test('local MCP lifecycle: default off, start, quit closes the port, restore, st
   // Nothing in the header speaks for MCP. It answered the permission there as a
   // question ("MCP served by:", then "This app may serve MCP:") above cards
   // reporting per-profile state, and the answer was read as state.
-  await expect(first.page.locator('header')).not.toContainText('MCP');
+  //
+  // Scoped to `header.top`: three components render a <header> (App, DetailPane,
+  // DraftPanel), so a bare `locator('header')` is a strict-mode violation the
+  // moment a second one is mounted — it passes here only because nothing is
+  // selected yet, which makes it a trap for whoever moves this line.
+  await expect(first.page.locator('header.top')).not.toContainText('MCP');
   await openSettings(first.page);
   await expect(first.page.getByTestId('mcp-allow')).not.toBeChecked();
   await addProfile(first.page, 'alpha');
