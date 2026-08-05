@@ -92,7 +92,33 @@ test('two profiles: map, detail pane, and AI view end-to-end', async () => {
     const customers = page.getByTestId('map-node-public.customers');
     await expect(customers).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId('map-node-public.recent_orders')).toBeVisible();
-    await expect(page.getByTestId('map-legend')).toBeVisible();
+    // What went wrong once: the map pane grew to its content instead of to the
+    // window (1372px inside an 812px viewport), which put the legend — pinned to
+    // the pane's bottom — thousands of pixels below the fold. `toBeVisible()`
+    // passed there, because visibility does not require being on screen.
+    //
+    // So the assertion is the invariant that actually failed: the pane never
+    // exceeds the window, and the legend is inside the pane. Deliberately NOT
+    // "the legend is inside the viewport" — the design accepts the page scrolling
+    // once the region above the workspace plus the pane floor exceed the window,
+    // and a guard that goes red in a state the design allows is a guard that will
+    // be deleted rather than believed.
+    await expect(async () => {
+      const fits = await page.getByTestId('semantic-map').evaluate((pane) => {
+        const p = pane.getBoundingClientRect();
+        const legend = pane.querySelector('[data-testid="map-legend"]');
+        if (legend === null) return { paneFitsWindow: false, legendInsidePane: false };
+        const l = legend.getBoundingClientRect();
+        // globalThis === window inside the page; spelled this way because the e2e
+        // suite typechecks under the node tsconfig, which has no DOM globals.
+        const viewportHeight = (globalThis as unknown as { innerHeight: number }).innerHeight;
+        return {
+          paneFitsWindow: p.height > 0 && p.height <= viewportHeight,
+          legendInsidePane: l.height > 0 && l.bottom <= p.bottom + 1 && l.top >= p.top - 1,
+        };
+      });
+      expect(fits).toEqual({ paneFitsWindow: true, legendInsidePane: true });
+    }).toPass({ timeout: 10_000 });
 
     // F3: clicking a node opens the compiled semantics.
     await customers.click();

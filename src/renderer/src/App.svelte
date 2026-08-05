@@ -709,7 +709,10 @@
               ondraft={addDraft}
             />
           {:else}
-            <aside class="placeholder">Click a relation on the map to see its compiled semantics - and what a default-configured kozou server hands your AI for it.</aside>
+            <!-- The sentence is a paragraph so it is capped like every other one;
+                 the aside itself must keep filling the pane, so the cap cannot go
+                 on the box. -->
+            <aside class="placeholder"><p>Click a relation on the map to see its compiled semantics - and what a default-configured kozou server hands your AI for it.</p></aside>
           {/if}
         </div>
         {#if currentDrafts.length > 0}
@@ -733,6 +736,7 @@
       {/if}
     </section>
   {/if}
+
 </main>
 
 <style>
@@ -742,10 +746,34 @@
     color: #1a1a1a;
     background: #fafafa;
   }
+  /* No width cap. The working surfaces here are a graph and a row grid, and
+     both spend width on content rather than on line length — a 1280px cap left
+     a wide window mostly empty while the pane an operator was editing in stayed
+     at a fraction of it. Prose is the one thing that does not want the width,
+     so prose caps itself (see the `:global(main p)` rule below).
+
+     `height`, not `min-height`. This is the load-bearing line: a definite height
+     is what reaches the grid row below and lets the panes scroll inside
+     themselves. `min-height` is only a floor — the box stays content-sized, so
+     nothing below it can resolve a height, `overflow-y: auto` on a pane never
+     engages, and the pane grows instead. Measured that way at this app's default
+     1280x840 window: opening the AI view tab made the shell 1799px tall in an
+     812px viewport, the map a 1372px empty box, and the map legend unreachable
+     below the fold. `100dvh` is `100vh` in an Electron window (no dynamic
+     toolbars); it is spelled `dvh` as the statement of intent. `100%` would not
+     work here — neither `html`, `body` nor `#app` carries a height. */
   main {
-    max-width: 1280px;
-    margin: 0 auto;
-    padding: 1rem 1.5rem 3rem;
+    box-sizing: border-box;
+    height: 100dvh;
+    /* The bottom padding does not reach the scrolled region, and there is no
+       cheap way to make it: in the accepted overflow case (see .split) the
+       content escapes from inside .workspace, past anything placed after it, so
+       neither a spacer element here nor padding on .workspace ends up below the
+       part that overflows. Measured: a 1.1rem spacer as the shell's last child
+       still had 43px of workspace content scrolling below it. Left as it is —
+       the last panel sits flush with the end of the scroll — rather than shipping
+       an element that looks like it solves this and does not. */
+    padding: 1rem 1.5rem 2rem;
     display: flex;
     flex-direction: column;
     gap: 0.9rem;
@@ -862,6 +890,26 @@
     color: #a00;
     margin: 0;
   }
+  /* The one thing that does not want the window's full width: a sentence set
+     across 1900px is harder to read than the same sentence at 78 characters.
+     Capped on the text (see the rule below) rather than by capping the page,
+     because the map and the row grid want every pixel.
+
+     Declared once, globally, and keyed on the element rather than on a class,
+     because both narrower forms had already leaked. Scoped to this file it missed
+     DraftPanel entirely; keyed on `.hint`/`.form-hint` it missed `.error`,
+     `.empty-note` and the placeholder's sentence — three more surfaces that are
+     prose by any reading. Every paragraph in the shell is capped, whichever
+     component renders it, and there is nothing to remember to add.
+
+     `max-width` only ever constrains, so a paragraph in a container narrower than
+     78ch is unaffected. Inline `<span class="hint">` (JsonTree, the @policy
+     aside) is unaffected too — max-width does not apply to inline boxes.
+     `.prose` stays as the opt-in for prose that is not a paragraph. */
+  :global(main p),
+  :global(.prose) {
+    max-width: 78ch;
+  }
   .form-hint {
     flex-basis: 100%;
     margin: 0;
@@ -881,11 +929,36 @@
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
+    flex: 1;
+    min-height: 0;
   }
+  /* An explicit single row rather than relying on an auto row stretching: the
+     panes scroll inside themselves, and that needs a height they can resolve
+     against.
+
+     The floor is what the panes keep when the window cannot pay for them, and
+     460px is what they used to be — a shorter window must not come out of this
+     change with less room than it had. When the rest of the shell plus that floor
+     exceeds the window, the content overflows its own `height` and the page
+     scrolls; that is the accepted degradation, not a failure.
+
+     Measured, because the reason here is easy to get wrong — I got it wrong twice
+     — so these are numbers off the instrument in the built app at the default
+     1280x840 window (812px of viewport), with two profiles: everything above
+     .workspace is 328px, this row is at its 460px floor, and the shell's content
+     comes to 855px, so it spills by 43px. What does not fit is the collapsed
+     Functions and Enums panels BELOW this row inside .workspace — not the cards,
+     which measure 208px at two profiles and 407px at five, so it would take nine
+     or ten to fill the viewport on their own. What several profiles do is squeeze
+     .workspace down onto this floor, which is a different thing from overflowing
+     it. */
   .split {
     display: grid;
     grid-template-columns: minmax(0, 1.6fr) minmax(300px, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     gap: 0.7rem;
+    flex: 1;
+    min-height: 460px;
   }
   .placeholder {
     border: 1px dashed #ccc;
@@ -896,7 +969,11 @@
     justify-content: center;
     padding: 1rem;
     text-align: center;
-    height: 460px;
+    height: 100%;
+    min-height: 0;
     box-sizing: border-box;
+  }
+  .placeholder p {
+    margin: 0;
   }
 </style>

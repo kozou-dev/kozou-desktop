@@ -369,7 +369,12 @@
     background: #fff;
     padding: 0.75rem 1rem;
     overflow-y: auto;
-    height: 460px;
+    /* Was a hard 460px, which ignored the window: a tall display gained nothing
+       and the pane an operator edits and browses rows in stayed the same size.
+       The grid row above supplies the height now. */
+    height: 100%;
+    min-height: 0;
+    box-sizing: border-box;
   }
   header {
     display: flex;
