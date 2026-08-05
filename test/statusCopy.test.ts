@@ -1,79 +1,162 @@
-// Two claims about what an operator can read off the screen, both of which
-// regress silently in markup:
+// Claims about what an operator can read off the screen, all of which regress
+// silently in markup:
 //
-//   * the three MCP modes are distinguishable. 'off' and 'remote-only' used to
-//     render identically, because no behaviour branches on 'remote-only' and
-//     the card showed nothing for an undeclared profile in either mode;
+//   * the MCP permission's copy asks about permission and never answers a
+//     question about running servers. The header used to answer it as a
+//     question ("MCP served by:", then "This app may serve MCP:") and readers
+//     took the answer for state; the copy moved to Settings, and what it must
+//     not do is bring the old reading with it;
+//   * the withdrawal prompt neither promises the servers will stop nor calls
+//     them all "running";
+//   * a declaration is reported without a mode and without claiming the app
+//     checked anything;
 //   * the row-access ladder is legible before its first step — that editing is
 //     a second approval, and where rows appear once granted.
 
 import { describe, expect, it } from 'vitest';
 import {
-  mcpModeLabel,
+  MCP_ALLOW_LABEL,
+  MCP_ALLOW_NOTE,
+  MCP_NOT_ALLOWED,
+  mcpStopWarning,
   REMOTE_DECLARED,
   rowAccessNote,
   servingNote,
 } from '../src/renderer/src/lib/statusCopy.js';
-import type { McpMode, RowAccess } from '../src/shared/types.js';
+import type { RowAccess } from '../src/shared/types.js';
 
-const MODES: McpMode[] = ['off', 'local', 'remote-only'];
 const LEVELS: RowAccess[] = ['off', 'read', 'readwrite'];
 
-describe('mcpModeLabel', () => {
-  it('names each mode by who serves, not by the setting value', () => {
-    expect(mcpModeLabel('off')).toBe('Nobody (off)');
-    expect(mcpModeLabel('local')).toBe('This app (local)');
-    expect(mcpModeLabel('remote-only')).toBe('Remote servers only');
+describe('MCP permission copy', () => {
+  it('asks about being allowed, not about what is running', () => {
+    // The label grants; it does not report. "Allow ... to serve" is a
+    // permission — the infinitive says nothing about whether anything serves —
+    // whereas a finite form ("serves", "is serving") or a badge word ("MCP on")
+    // asserts a state this value cannot support, because it counts nothing.
+    // That is the distinction the old header lost: its answer was grammatically
+    // a state, and readers took it as one.
+    //
+    // "on" is deliberately NOT in the deny-list: the label says "on loopback",
+    // where it is a preposition, and a list containing it fails on this very
+    // wording (measured — it did). The badge words `MCP on :<port>` / `MCP off`
+    // are the card's to avoid, and the card's own copy is checked below.
+    expect(MCP_ALLOW_LABEL).toMatch(/\ballow\b/i);
+    expect(MCP_ALLOW_LABEL).toMatch(/\bto serve\b/i);
+    expect(MCP_ALLOW_LABEL).not.toMatch(/\bserves\b|\bserving\b|running|active|live|listening/i);
+    // Where it serves is part of what is being permitted, and the bind is fixed
+    // to 127.0.0.1 in main. Without this, "Allow profiles to serve MCP on any
+    // interface" satisfies every assertion above while promising something the
+    // code refuses to do.
+    expect(MCP_ALLOW_LABEL).toMatch(/\bloopback\b/i);
   });
 
-  it('gives the three modes three different labels', () => {
-    expect(new Set(MODES.map(mcpModeLabel)).size).toBe(3);
+  it('says that switching it on serves nothing by itself', () => {
+    // The reader's actual mistake, measured: "allowed" was read as "up". The
+    // note has to deny it in the same breath, and name the per-profile start as
+    // what does the serving.
+    expect(MCP_ALLOW_NOTE).toMatch(/nothing listens/i);
+    expect(MCP_ALLOW_NOTE).toMatch(/start a profile/i);
   });
 
-  it('never shows the raw setting value', () => {
-    // 'remote-only' as a label is the setting's identifier leaking into the UI;
-    // it also reads as a restriction on the app rather than a statement about
-    // who serves.
-    for (const mode of MODES) expect(mcpModeLabel(mode)).not.toBe(mode);
+  it('says what withdrawing it does, in both directions', () => {
+    // Withdrawal is two things, and an operator who is told only the first will
+    // not expect the second: the servers that are up are asked to stop, and
+    // further starts are refused.
+    expect(MCP_ALLOW_NOTE).toMatch(/asks every server that is up to stop/i);
+    expect(MCP_ALLOW_NOTE).toMatch(/refuses further starts/i);
+  });
+
+  it('never promises the note is about a server that exists', () => {
+    expect(MCP_ALLOW_NOTE).not.toMatch(/is (now )?(running|serving|listening)/i);
+  });
+
+  it('never turns "asked to stop" into a guarantee', () => {
+    // The four assertions above are all satisfied by appending a false promise
+    // ("Servers stop within three seconds."), which is what a deny-list has to
+    // catch. Residual hole, stated rather than assumed: a deny-list can be
+    // worded around, and only an exact-prose assertion closes that. This pins
+    // the wordings that were actually reachable from the true sentence.
+    expect(MCP_ALLOW_NOTE).not.toMatch(/within \w+ seconds?|guarantee|terminat|will stop|are stopped|shuts? down/i);
+  });
+
+  it("names the permission on a card that cannot change it, without calling it a server state", () => {
+    // 'MCP off' would read as a state the server is in; there is no server.
+    expect(MCP_NOT_ALLOWED).toMatch(/not allowed/i);
+    expect(MCP_NOT_ALLOWED).not.toMatch(/\boff\b|stopped|crashed/i);
+    // A card cannot grant the permission, so it points at what can.
+    expect(MCP_NOT_ALLOWED).toMatch(/settings/i);
+    // The permission is app-wide. Sitting on a card invites scoping it to that
+    // card: "MCP not allowed for this database - see Settings" passes everything
+    // above and tells the reader the setting is per database, which it is not.
+    expect(MCP_NOT_ALLOWED).not.toMatch(/this database|this profile|for this\b|here\b/i);
+  });
+});
+
+describe('mcpStopWarning', () => {
+  it('does not promise the servers will stop', () => {
+    // UtilityProcess.kill()'s failure result is ignored and the wait gives up
+    // after three seconds, so a child that refuses to die leaves a listener
+    // behind. "will stop" / "stops" would be a promise this cannot keep.
+    for (const n of [1, 2, 7]) {
+      const text = mcpStopWarning(n);
+      expect(text).toMatch(/will be asked to stop/i);
+      // The second pattern is the one a rewrite reaches for: keeping "will be
+      // asked to stop" and appending the guarantee anyway ("...and they will
+      // then terminate") satisfies everything else here. Residual hole, stated
+      // rather than assumed: a deny-list can be worded around, and only an
+      // exact-prose assertion closes it.
+      expect(text).not.toMatch(/will stop|stops (them|it)|are stopped|and stop\b/i);
+      expect(text).not.toMatch(/terminat|shuts? down|be killed|guarantee|within \w+ seconds?/i);
+    }
+  });
+
+  it('does not call the counted servers all running', () => {
+    // The count includes 'starting' — a server whose listener has not been
+    // confirmed yet — so naming only the confirmed ones undercounts what the
+    // click affects. This is the assertion the previous copy failed.
+    for (const n of [1, 3]) {
+      const text = mcpStopWarning(n);
+      expect(text).toMatch(/running or starting/i);
+      expect(text).not.toMatch(/\d+ running server/i);
+    }
+  });
+
+  it('agrees with itself about the number it was given', () => {
+    expect(mcpStopWarning(1)).toContain('1 server ');
+    expect(mcpStopWarning(2)).toContain('2 servers ');
+    expect(mcpStopWarning(0)).toContain('0 servers ');
   });
 });
 
 describe('servingNote', () => {
-  it('says nothing extra under local - the card reports the app own MCP row', () => {
-    expect(servingNote('local', false)).toBeNull();
-    expect(servingNote('local', true)).toBeNull();
-  });
-
-  it('reports a declaration as a declaration, not as a verified fact', () => {
-    const note = servingNote('remote-only', true);
+  it('reports a declaration as a declaration, never as something checked', () => {
+    const note = servingNote(true);
     expect(note?.text).toBe(REMOTE_DECLARED);
     expect(note?.text).toContain('declared');
+    expect(note?.text).not.toMatch(/reachable|verified|responding|online|confirmed|up\b/i);
   });
 
-  it('distinguishes remote-only from off in both declaration states', () => {
-    // The whole point: without this, both modes render the same card and an
-    // operator cannot tell which one is in force from the profile alone.
-    for (const declared of [false, true]) {
-      expect(servingNote('remote-only', declared)).not.toBeNull();
-      expect(servingNote('off', declared)).toBeNull();
-    }
-    expect(servingNote('remote-only', false)?.text).toBe('no serving server declared');
+  it('says nothing when nothing was declared', () => {
+    // Silence is not a claim. "no serving server declared" made the card speak
+    // about a database it knows nothing about: an operator not having recorded
+    // anything is not evidence that nothing serves it.
+    expect(servingNote(false)).toBeNull();
   });
 
-  it('says nothing at all under off, declaration or not', () => {
-    // The header reads "Nobody (off)". A card answering "served remotely"
-    // underneath it would contradict the header on the same screen, so under
-    // 'off' the app makes no MCP claim at all.
-    expect(servingNote('off', true)).toBeNull();
-    expect(servingNote('off', false)).toBeNull();
-  });
-
-  it('never claims the app checked anything', () => {
-    for (const mode of MODES) {
-      for (const declared of [false, true]) {
-        const text = servingNote(mode, declared)?.text ?? '';
-        expect(text).not.toMatch(/reachable|verified|responding|online|confirmed/i);
-      }
+  it('ignores a mode even when one is forced in', () => {
+    // Structural, not textual: the badge used to be rendered from two branches
+    // under two modes, which is how the app ended up saying different things
+    // about the same declaration depending on a setting unrelated to it.
+    //
+    // Asserted behaviourally rather than by arity. `expect(servingNote.length)`
+    // was the obvious guard and it is defeated by a default: adding
+    // `(declared, mode = 'off')` and branching on `mode` leaves `.length === 1`,
+    // so the guard passes while the regression is back. Forcing a mode through
+    // the call catches that, because a branch on it changes the result.
+    const forced = servingNote as unknown as (declared: boolean, mode?: unknown) => unknown;
+    for (const mode of ['off', 'local', 'remote-only', undefined]) {
+      expect(forced(true, mode)).toEqual(servingNote(true));
+      expect(forced(false, mode)).toEqual(servingNote(false));
     }
   });
 });

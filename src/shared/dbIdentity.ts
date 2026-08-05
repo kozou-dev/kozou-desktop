@@ -7,10 +7,17 @@
 // including the user would miss the same database reached via two roles.
 //
 // Best-effort by design, with an asymmetric contract: a MISS is acceptable
-// (DNS aliases and connection poolers are not resolved), but a MATCH must be
-// reliable — callers warn on matches. URL forms whose effective identity
+// (DNS aliases and connection poolers are not resolved), but a MATCH is meant
+// to be reliable — callers warn on matches. URL forms whose effective identity
 // this function cannot model therefore return null ("skip the check")
 // rather than risk a false duplicate warning.
+//
+// One known exception to that reliability, stated rather than left implied: the
+// three loopback spellings collapse to a single host (below), so two
+// *different* servers — one bound to 127.0.0.1, one to [::1] — carrying the
+// same port and database name compare equal. Collapsing them is the right
+// trade for the case this check exists for (one local server named two ways),
+// and the cost is a warning the operator can start past.
 
 // WHATWG URL always serializes IPv6 hostnames bracketed ("[::1]").
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);

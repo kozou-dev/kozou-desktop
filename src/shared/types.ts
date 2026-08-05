@@ -4,11 +4,21 @@
 // form only, and inspect results carry a trimmed SchemaContext (raw catalog
 // records stripped — see trim.ts).
 
-/** App-wide MCP serving mode. 'off' (the default) disables everything;
- *  'local' lets profiles run app-managed loopback MCP servers; 'remote-only'
- *  disables local serving and only surfaces remote declarations. A single
- *  value, so the modes are mutually exclusive by construction. */
-export type McpMode = 'off' | 'local' | 'remote-only';
+/** App-wide permission: whether a profile is ALLOWED to run an app-managed
+ *  loopback MCP server. A gate, not a report. 'local' permits a start and
+ *  starts nothing by itself, so every profile can sit stopped while this reads
+ *  'local'; 'off' (the default) refuses a start and asks whatever is up to
+ *  stop. It counts nothing — how many servers are actually up is per profile,
+ *  in `McpStatusEntry.status`, and no screen may answer a question about
+ *  running servers from this value.
+ *
+ *  It says nothing about servers this app does not run. A profile can declare
+ *  that a remote MCP server already serves its database (`remoteMcp`), and that
+ *  declaration is independent of this gate. A third mode ('remote-only') used
+ *  to carry those declarations; it branched no behaviour, and a reader could not
+ *  tell what choosing it would do, so the declaration now stands on its own and
+ *  a stored 'remote-only' degrades to the 'off' it already behaved as. */
+export type McpMode = 'off' | 'local';
 
 /** Main-assigned local-MCP allocation for one profile. Sticky by design:
  *  the port is assigned once and only changes on an explicit reassignment,

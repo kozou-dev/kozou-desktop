@@ -77,7 +77,13 @@ test('two profiles: map, detail pane, and AI view end-to-end', async () => {
   }
 
   for (const name of ['alpha', 'beta']) {
-    await page.getByTestId(`card-${name}`).click();
+    // Clicked in the card's own padding rather than at its centre. The card is a
+    // button wrapping several interactive children (the row-access links, the MCP
+    // links), each of which stops propagation, so a centre click selects nothing
+    // whenever a row happens to land there — measured: adding one row moved the
+    // centre onto `enable browsing`, and this assertion then waited 60s on the
+    // previous profile's stats. The corner is card body at any height.
+    await page.getByTestId(`card-${name}`).click({ position: { x: 6, y: 6 } });
     await expect(page.getByTestId('inspect-stats')).toContainText(name, { timeout: 60_000 });
 
     // F2: the semantic map lays out and renders fixture relations.

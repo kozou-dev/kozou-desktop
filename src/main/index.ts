@@ -1,10 +1,11 @@
 // Electron main process: window lifecycle, egress hardening, profile store,
 // and the inspect/MCP IPC surfaces. By default the app opens no server and no
 // port — the only network peer is the user's own database, reached from
-// short-lived workers. The one exception is the opt-in local MCP mode
-// (default off), which listens on 127.0.0.1 only to serve read-only describe
-// tools to AI clients on the same machine; outbound traffic is still only
-// the user's own databases.
+// short-lived workers. The one exception is the opt-in local MCP hub, which
+// needs both an app-wide permission (off by default) and a per-profile start:
+// once started it listens on 127.0.0.1 only to serve read-only describe tools
+// to AI clients on the same machine; outbound traffic is still only the user's
+// own databases.
 
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
