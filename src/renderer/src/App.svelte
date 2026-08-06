@@ -943,6 +943,21 @@
     align-items: center;
     gap: 0.3rem;
   }
+  /* Does not shrink. It is a flex item of a shell with a definite height, and
+     every `pre` inside it is a scroll container (`overflow-x: auto`), which
+     zeroes that box's automatic minimum size — so the snippets collapsed to a
+     line and a half of a config the operator opened this panel to read. Measured
+     on the packaged app with two profiles and a server running: the mcpServers
+     JSON showed its first two lines and nothing else.
+
+     Third time this shape has bitten in this file (the rail, the all-databases
+     grid, now this), so the rule is worth stating once: a scroll container inside
+     a squeezed flex column has no floor of its own. Either it gets one, or the
+     thing that squeezes it must not.
+
+     The panel is transient and the operator asked for it, so it takes the height
+     it needs and the work below moves down; the page scrolls, which is the
+     degradation this shell already accepts. */
   .snippets {
     border: 1px solid #ddd;
     border-radius: 10px;
@@ -951,6 +966,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
+    flex: 0 0 auto;
   }
   .snippets-head,
   .snippet-row {
@@ -966,6 +982,10 @@
     padding: 0.5rem;
     font-size: 0.72rem;
     overflow-x: auto;
+    /* Belt as well as braces: even if something above starts squeezing this
+       column again, a config that is one line short of readable is worse than
+       one that scrolls. */
+    flex: 0 0 auto;
   }
   h1 {
     font-size: 1.15rem;
