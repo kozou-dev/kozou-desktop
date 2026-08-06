@@ -343,7 +343,7 @@
     {:else if activeTab === 'data'}
       <!-- Keyed so a profile re-save, a grant change or a different relation
            builds a fresh panel: cursors and rows belong to the connection and
-           the grant they were fetched under, never to the name on the card. -->
+           the grant they were fetched under, never to the profile's name. -->
       {#key `${profile}|${epoch}|${entity.qualifiedName}`}
         <DataPanel
           {profile}

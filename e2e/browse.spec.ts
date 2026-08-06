@@ -1,7 +1,8 @@
 // End-to-end for the Data tab: the row browser as an operator reaches it, not
 // as the preload API sees it (that is data.spec.ts). What is worth proving here
-// is the wiring the UI owns — the grant is legible on the card whether or not
-// it is granted, the tab is offered only when it is, the cursor handed back by
+// is the wiring the UI owns — the grant is legible wherever the profile is
+// described (this test reads the bar above the workspace; the card in the
+// all-databases view renders the same component) whether or not it is granted, the tab is offered only when it is, the cursor handed back by
 // one page is what fetches the next, changing the sort restarts the traversal
 // instead of replaying a cursor the new ORDER BY would reject, a page that
 // fails or comes back empty leaves a way out rather than a stranded panel, and a
@@ -115,7 +116,9 @@ async function launchWithProfile(
   await page.getByPlaceholder('postgresql://user:password@host:5432/db').fill(url!);
   await page.getByPlaceholder('schemas (comma-separated)').fill('public');
   await page.getByRole('button', { name: 'Save profile' }).click();
-  await expect(page.getByTestId(`card-${name}`)).toBeVisible({ timeout: 15_000 });
+  // The rail, not the card: saving auto-inspects, which selects the profile, and
+  // the card grid is the all-databases view — not on screen while one is selected.
+  await expect(page.getByTestId(`rail-${name}`)).toBeVisible({ timeout: 15_000 });
   await expect(page.getByTestId('inspect-stats')).toBeVisible({ timeout: 60_000 });
 
   await app.evaluate(({ dialog }, answer) => {
@@ -133,7 +136,10 @@ test('data tab: gated by the grant, browses rows, and pages by cursor', async ()
   const { app, page } = await launchWithProfile('browse', 0);
 
   try {
-    // --- the level is on the card before anything is granted -----------------
+    // --- the level is on screen before anything is granted -------------------
+    // Read off the profile bar here: the profile is selected (saving inspected
+    // it), and the bar is what describes the profile being worked on. The same
+    // component renders it on the card in the all-databases view.
     const badge = page.getByTestId('rowaccess-badge-browse');
     await expect(badge).toHaveText('rows: off');
 

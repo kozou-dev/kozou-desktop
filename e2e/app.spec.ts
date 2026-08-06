@@ -66,24 +66,27 @@ test('two profiles: map, detail pane, and AI view end-to-end', async () => {
     await page.getByPlaceholder('schemas (comma-separated)').fill('public');
     await page.getByRole('button', { name: 'Save profile' }).click();
     // Wait until the save settles either way, then surface a failure as its
-    // message instead of a bare not-found timeout on the card.
-    const card = page.getByTestId(`card-${name}`);
+    // message instead of a bare not-found timeout on the rail item. The rail is
+    // what a saved profile always appears in: saving auto-inspects, which
+    // selects the profile, and the card grid is the all-databases view — not on
+    // screen while a profile is selected.
+    const railItem = page.getByTestId(`rail-${name}`);
     const err = page.getByTestId('form-error');
-    await expect(card.or(err).first()).toBeVisible();
+    await expect(railItem.or(err).first()).toBeVisible();
     await expect(err).toHaveCount(0);
-    await expect(card).toBeVisible();
+    await expect(railItem).toBeVisible();
     // Saving auto-inspects the new profile.
     await expect(page.getByTestId('inspect-stats')).toBeVisible({ timeout: 60_000 });
   }
 
   for (const name of ['alpha', 'beta']) {
-    // Clicked in the card's own padding rather than at its centre. The card is a
-    // button wrapping several interactive children (the row-access links, the MCP
-    // links), each of which stops propagation, so a centre click selects nothing
-    // whenever a row happens to land there — measured: adding one row moved the
-    // centre onto `enable browsing`, and this assertion then waited 60s on the
-    // previous profile's stats. The corner is card body at any height.
-    await page.getByTestId(`card-${name}`).click({ position: { x: 6, y: 6 } });
+    // Selected from the rail, which is one line per database and holds nothing
+    // interactive of its own. The card in the all-databases view is still
+    // clickable, and clicking it at the centre is still unreliable — it is a
+    // button wrapping interactive children (the row-access links, the MCP links)
+    // that each stop propagation, and measured, adding one row put the centre on
+    // `enable browsing`. A rail line cannot land in that state.
+    await page.getByTestId(`rail-${name}`).click();
     await expect(page.getByTestId('inspect-stats')).toContainText(name, { timeout: 60_000 });
 
     // F2: the semantic map lays out and renders fixture relations.
@@ -170,7 +173,21 @@ test('two profiles: map, detail pane, and AI view end-to-end', async () => {
     await expect(viewAi).toContainText('not reproduced here yet');
   }
 
-  // F1: overview cards carry counts and annotation coverage.
+  // Exactly one of the two views is mounted, and each states the row-access
+  // level once. The card and the profile bar render that level from the same
+  // component, so what has to hold is that they are never both on screen — two
+  // live copies of a claim is how one of them ends up corrected and the other
+  // left standing (this app has paid for that once already).
+  await expect(page.getByTestId('profile-bar')).toBeVisible();
+  await expect(page.getByTestId('overview-cards')).toHaveCount(0);
+  await expect(page.getByTestId('rowaccess-badge-beta')).toHaveCount(1);
+
+  // F1: the all-databases view puts every profile side by side, which is what
+  // makes coverage comparable; the cards carry counts and annotation coverage.
+  await page.getByTestId('rail-all').click();
+  await expect(page.getByTestId('overview-cards')).toBeVisible();
+  await expect(page.getByTestId('profile-bar')).toHaveCount(0);
+  await expect(page.getByTestId('rowaccess-badge-beta')).toHaveCount(1);
   await expect(page.getByTestId('card-alpha')).toContainText('tables');
   await expect(page.getByTestId('card-alpha')).toContainText('annotated');
 

@@ -11,7 +11,9 @@
 //   * a declaration is reported without a mode and without claiming the app
 //     checked anything;
 //   * the row-access ladder is legible before its first step — that editing is
-//     a second approval, and where rows appear once granted.
+//     a second approval, and where rows appear once granted;
+//   * the config panel's note does not contradict the badge beside it, and does
+//     not send the operator to do something that cannot work.
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -22,8 +24,9 @@ import {
   REMOTE_DECLARED,
   rowAccessNote,
   servingNote,
+  snippetServerNote,
 } from '../src/renderer/src/lib/statusCopy.js';
-import type { RowAccess } from '../src/shared/types.js';
+import type { McpServerStatus, RowAccess } from '../src/shared/types.js';
 
 const LEVELS: RowAccess[] = ['off', 'read', 'readwrite'];
 
@@ -39,7 +42,8 @@ describe('MCP permission copy', () => {
     // "on" is deliberately NOT in the deny-list: the label says "on loopback",
     // where it is a preposition, and a list containing it fails on this very
     // wording (measured — it did). The badge words `MCP on :<port>` / `MCP off`
-    // are the card's to avoid, and the card's own copy is checked below.
+    // belong to a profile's own MCP row, not here, and that row's copy is
+    // checked below.
     expect(MCP_ALLOW_LABEL).toMatch(/\ballow\b/i);
     expect(MCP_ALLOW_LABEL).toMatch(/\bto serve\b/i);
     expect(MCP_ALLOW_LABEL).not.toMatch(/\bserves\b|\bserving\b|running|active|live|listening/i);
@@ -79,15 +83,16 @@ describe('MCP permission copy', () => {
     expect(MCP_ALLOW_NOTE).not.toMatch(/within \w+ seconds?|guarantee|terminat|will stop|are stopped|shuts? down/i);
   });
 
-  it("names the permission on a card that cannot change it, without calling it a server state", () => {
+  it("names the permission on a row that cannot change it, without calling it a server state", () => {
     // 'MCP off' would read as a state the server is in; there is no server.
     expect(MCP_NOT_ALLOWED).toMatch(/not allowed/i);
     expect(MCP_NOT_ALLOWED).not.toMatch(/\boff\b|stopped|crashed/i);
-    // A card cannot grant the permission, so it points at what can.
+    // A profile's row cannot grant the permission, so it points at what can.
     expect(MCP_NOT_ALLOWED).toMatch(/settings/i);
-    // The permission is app-wide. Sitting on a card invites scoping it to that
-    // card: "MCP not allowed for this database - see Settings" passes everything
-    // above and tells the reader the setting is per database, which it is not.
+    // The permission is app-wide. Sitting beside one profile invites scoping it
+    // to that profile: "MCP not allowed for this database - see Settings" passes
+    // everything above and tells the reader the setting is per database, which it
+    // is not.
     expect(MCP_NOT_ALLOWED).not.toMatch(/this database|this profile|for this\b|here\b/i);
   });
 });
@@ -137,7 +142,7 @@ describe('servingNote', () => {
   });
 
   it('says nothing when nothing was declared', () => {
-    // Silence is not a claim. "no serving server declared" made the card speak
+    // Silence is not a claim. "no serving server declared" made the row speak
     // about a database it knows nothing about: an operator not having recorded
     // anything is not evidence that nothing serves it.
     expect(servingNote(false)).toBeNull();
@@ -233,5 +238,49 @@ describe('rowAccessNote', () => {
 
   it('gives every level its own text', () => {
     expect(new Set(LEVELS.map(rowAccessNote)).size).toBe(3);
+  });
+});
+
+describe('config panel note', () => {
+  it('says nothing while the server is up', () => {
+    expect(snippetServerNote('running')).toBeNull();
+  });
+
+  it('does not call a failed bind "stopped", and does not tell you to start it', () => {
+    // The panel stays open when a start fails, so this note sits directly under a
+    // badge reading "MCP port busy". Saying "server currently stopped - start it
+    // before connecting" contradicted that badge and sent the operator to the one
+    // action that re-fails: the port is held by something else.
+    const note = snippetServerNote('error-port-busy');
+    expect(note).not.toBeNull();
+    expect(note).not.toMatch(/stopped/i);
+    expect(note).not.toMatch(/\bstart it\b/i);
+    // It names what does work.
+    expect(note).toMatch(/move its port/i);
+    // And stays inside what is known: the app knows its own bind failed, nothing
+    // about what holds the port.
+    expect(note).not.toMatch(/malicious|attacker|another kozou|hostile|unsafe/i);
+  });
+
+  it('does not tell you to start a profile whose start was refused', () => {
+    const note = snippetServerNote('blocked-duplicate');
+    expect(note).not.toBeNull();
+    expect(note).not.toMatch(/\bstart it\b/i);
+    expect(note).toMatch(/refused/i);
+  });
+
+  it('says the server is stopped for every state where it is', () => {
+    const stoppedish: McpServerStatus[] = [
+      'stopped',
+      'starting',
+      'stopped-crashed',
+      'stopped-profile-updated',
+      'error',
+    ];
+    for (const st of stoppedish) {
+      expect(snippetServerNote(st)).toMatch(/stopped/i);
+    }
+    // An unread registry is not a claim that a server is up.
+    expect(snippetServerNote(undefined)).toMatch(/stopped/i);
   });
 });

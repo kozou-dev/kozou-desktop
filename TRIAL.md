@@ -12,11 +12,16 @@ nothing to configure beyond adding your connection profiles.
 A least-privilege **read-only** connection role is all you need. Introspection
 runs inside a `READ ONLY` transaction, and so does row browsing — and so does
 every read the editor makes. Browsing is **off for every profile** until you turn
-it on from the profile card and approve a system dialog; the card shows the
-current level either way, and editing a profile's connection turns browsing back
-off so the next attempt asks again.
+it on from that database's own row and approve a system dialog; the level is shown
+either way, and editing a profile's connection turns browsing back off so the next
+attempt asks again. That row is the bar above the map while the database is
+selected from the rail, and its card in the **All databases** view — one database
+at a time in the first, all of them side by side in the second. So a grant on a
+database you are not looking at is not on screen: the rail says nothing about
+levels, and **All databases** at the top of it is where you can see every
+database's level at once.
 
-Row **editing** is a second, separate opt-in on the same card, with its own
+Row **editing** is a second, separate opt-in on the same row, with its own
 system dialog — a browsing grant never becomes a writing one on its own, and a
 read-only role cannot perform it whatever the app is told. Turn it on only if
 you want to try it; nothing else in the app needs it. Wherever row values are
@@ -55,7 +60,8 @@ Open-ended — a sentence each is plenty:
   schemas you didn't add to the profile are intentionally hidden; views that
   read from outside those schemas show as dashed "ghost" nodes.)
 - The **local MCP hub** (**Settings** → tick **Allow profiles to serve MCP on
-  loopback**, then **start** on a card, then **AI client config**) serves the
+  loopback**, then **start** on that database's row, then **AI client config**)
+  serves the
   same describe surface to your own AI client, one server per profile — see the
   README for the steps. If you connect it: did starting, stopping and
   configuring them from one place beat running a server per database yourself

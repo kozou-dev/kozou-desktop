@@ -52,7 +52,9 @@ async function addProfile(page: Page, name: string, opts?: { remoteDeclared?: bo
     await page.getByTestId('remote-declared').check();
   }
   await page.getByRole('button', { name: 'Save profile' }).click();
-  await expect(page.getByTestId(`card-${name}`)).toBeVisible({ timeout: 15_000 });
+  // The rail, not the card: saving auto-inspects, which selects the profile, and
+  // the card grid is the all-databases view — not on screen while one is selected.
+  await expect(page.getByTestId(`rail-${name}`)).toBeVisible({ timeout: 15_000 });
 }
 
 /** Open the Settings panel, where the MCP permission lives. Retried the same
@@ -113,11 +115,15 @@ test('local MCP lifecycle: default off, start, quit closes the port, restore, st
   await expect(first.page.getByTestId('mcp-allow')).not.toBeChecked();
   await addProfile(first.page, 'alpha');
 
-  // The card states the permission it is subject to even though nothing may run
-  // yet. This row used to be absent entirely while the permission was off, so an
-  // operator who had not opened Settings had no way to learn from the screen
+  // The profile states the permission it is subject to even though nothing may
+  // run yet. This row used to be absent entirely while the permission was off, so
+  // an operator who had not opened Settings had no way to learn from the screen
   // that per-profile MCP existed. Visibility, not just text: a row rendered and
   // then hidden by CSS would satisfy a text-only assertion.
+  //
+  // Read off the profile bar: saving selected alpha. Below, after the relaunch,
+  // nothing is selected and the same rows are read off the card in the
+  // all-databases view — one component renders both, which is the point.
   await expect(first.page.getByTestId('mcp-badge-alpha')).toBeVisible();
   await expect(first.page.getByTestId('mcp-badge-alpha')).toHaveText('MCP not allowed - see Settings');
   await expect(first.page.getByTestId('mcp-start-alpha')).toHaveCount(0);
@@ -184,7 +190,7 @@ test('local MCP lifecycle: default off, start, quit closes the port, restore, st
   expect(stopped.autoStart).toBe(false);
 
   // Confirm-yes path: start again, then withdraw the permission — the servers
-  // are asked to stop and the card falls back to stating the permission.
+  // are asked to stop and the row falls back to stating the permission.
   await second.page.getByTestId('mcp-start-alpha').click();
   await expect(second.page.getByTestId('mcp-badge-alpha')).toHaveText(/MCP on :\d+/, { timeout: 30_000 });
   await second.page.getByTestId('mcp-allow').click();
@@ -202,6 +208,14 @@ test('duplicate warning: declared remote MCP on the same database blocks, overri
 
   await addProfile(page, 'declared', { remoteDeclared: true });
   await addProfile(page, 'target');
+  // This test reads two profiles at once — one profile's declaration beside
+  // another profile's start control — so it works in the all-databases view,
+  // which is the only surface that shows every profile. The bar above the
+  // workspace describes the selected profile and nothing else, and which profile
+  // that is after two saves is not something this test should depend on:
+  // inspections are serialized, so the second save's auto-inspect is dropped
+  // while the first one is still running and the selection stays on 'declared'.
+  await page.getByTestId('rail-all').click();
   // What the operator recorded about someone else's server is true whether or
   // not this app may serve, so the badge is asserted with the permission off AND
   // with it on. It used to be rendered from two branches under two modes, which
@@ -233,6 +247,27 @@ test('duplicate warning: declared remote MCP on the same database blocks, overri
   await expect(page.getByTestId('mcp-dup-target')).toBeVisible({ timeout: 15_000 });
   await page.getByTestId('mcp-dup-confirm-target').click();
   await expect(page.getByTestId('mcp-badge-target')).toHaveText(/MCP on :\d+/, { timeout: 30_000 });
+
+  // The config panel belongs to one profile and carries that profile's secret
+  // capability path, so it is on screen only for a profile the screen is
+  // describing. Asserted rather than left to the code because the first attempt
+  // at it cleared the panel on each navigation path and missed three of them.
+  await page.getByTestId('mcp-config-target').click();
+  await expect(page.getByTestId('mcp-snippets')).toContainText('kozou-local-target');
+  // Another profile selected: target is not on screen, so neither is its URL.
+  await page.getByTestId('rail-declared').click();
+  await expect(page.getByTestId('mcp-snippets')).toHaveCount(0);
+  // And it stays closed on the way back: leaving is what closes it, so a secret
+  // capability URL never returns to the screen without being asked for again.
+  await page.getByTestId('rail-target').click();
+  await expect(page.getByTestId('mcp-snippets')).toHaveCount(0);
+  // The all-databases view describes every profile, so a panel opened there is
+  // attributed and stays.
+  await page.getByTestId('rail-all').click();
+  await page.getByTestId('mcp-config-target').click();
+  await expect(page.getByTestId('mcp-snippets')).toContainText('kozou-local-target');
+  await page.getByTestId('rail-declared').click();
+  await expect(page.getByTestId('mcp-snippets')).toHaveCount(0);
 
   await app.close();
 });

@@ -12,11 +12,13 @@
   import EnumsPanel from './EnumsPanel.svelte';
   import FunctionsPanel from './FunctionsPanel.svelte';
   import OverviewCards from './OverviewCards.svelte';
+  import ProfileBar from './ProfileBar.svelte';
+  import ProfileRail from './ProfileRail.svelte';
   import SearchBar from './SearchBar.svelte';
   import SemanticMap from './SemanticMap.svelte';
   import { buildMcpClientSnippets } from '../../shared/mcpSnippet';
   import type { CommentDraft } from './lib/commentEmit';
-  import { MCP_ALLOW_LABEL, MCP_ALLOW_NOTE, mcpStopWarning } from './lib/statusCopy';
+  import { MCP_ALLOW_LABEL, MCP_ALLOW_NOTE, mcpStopWarning, snippetServerNote } from './lib/statusCopy';
 
   const api = window.kozouDesktop;
 
@@ -68,12 +70,13 @@
   // autoStart ride the same entries).
   //
   // `mcpKnown` is false until BOTH have been read, and the 'off' below is a
-  // placeholder rather than an answer. Either value alone lets a card state
-  // something it cannot support: the permission without the registry cannot say
-  // what is running, and the registry without the permission cannot say whether
-  // a start is even allowed. Nothing that speaks for either is rendered while
-  // this is false — not the card rows, and not the Settings control, whose
-  // unchecked box would read as "not allowed" before anything was read.
+  // placeholder rather than an answer. Either value alone lets a profile's MCP
+  // row state something it cannot support: the permission without the registry
+  // cannot say what is running, and the registry without the permission cannot
+  // say whether a start is even allowed. Nothing that speaks for either is
+  // rendered while this is false — not those rows on either surface that carries
+  // them, and not the Settings control, whose unchecked box would read as "not
+  // allowed" before anything was read.
   let mcpMode = $state<McpMode>('off');
   let mcp = $state<Record<string, McpStatusEntry>>({});
   let mcpKnown = $state(false);
@@ -82,7 +85,7 @@
   let mcpReadFailed = $state(false);
   let duplicatePending = $state<{ profile: string; duplicates: string[] } | null>(null);
   // A native approval dialog is modal to the window, so at most one row-access
-  // request can be in flight; the name is held to show which card is waiting.
+  // request can be in flight; the name is held to show which profile is waiting.
   let rowAccessPending = $state<string | null>(null);
   let pendingMode = $state<McpMode | null>(null);
   // True from the click that writes the permission until the write has settled.
@@ -112,7 +115,6 @@
     if (st?.port === undefined || st.path === undefined) return null;
     return buildMcpClientSnippets(snippetFor, st.port, st.path);
   });
-
   function applyMcpStatus(entries: McpStatusEntry[]): void {
     const next: Record<string, McpStatusEntry> = {};
     for (const e of entries) next[e.profile] = e;
@@ -159,7 +161,7 @@
       pendingMode = next;
       // The box has moved but nothing has been written yet, so it is showing an
       // answer that is not in force. Rebuild it from `mcpMode`: while the
-      // confirmation is open the old permission still stands, cards can still
+      // confirmation is open the old permission still stands, profiles can still
       // start servers, and cancelling leaves everything as it was. The focus
       // goes to the prompt instead of coming back here — it is what the
       // operator now has to answer.
@@ -231,7 +233,7 @@
 
   /** Focus the confirmation's primary button as it appears. The prompt is
    *  announced by `role="alert"` and does not trap the focus: it is not modal
-   *  (the cards behind it stay live, which is deliberate — a server can still
+   *  (the surfaces behind it stay live, which is deliberate — a server can still
    *  be stopped by hand while it is open), so this places the focus rather than
    *  holding it. */
   function focusOnMount(node: HTMLElement): void {
@@ -292,8 +294,8 @@
     // decision, so nothing else announces the level), and a badge that lags —
     // or that a failed refresh leaves lagging for good — is exactly the failure
     // that control exists to prevent. A rejection needs no fallback: every
-    // throw on that path happens before the store is written, so the level the
-    // card already shows is still the level in force.
+    // throw on that path happens before the store is written, so the level
+    // already on screen is still the level in force.
     if (applied !== undefined) {
       profiles = profiles.map((p) => (p.name === name ? { ...p, rowAccess: applied } : p));
     }
@@ -383,6 +385,49 @@
   const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
   const currentProfile = $derived(profiles.find((p) => p.name === selectedProfile) ?? null);
+
+  /** Whose config panel is actually on screen, or null. The panel names one
+   *  profile and carries that profile's secret capability path, so it is shown
+   *  only for a profile the screen is currently describing: the selected one, or
+   *  any of them in the all-databases view.
+   *
+   *  A condition rather than a `snippetFor = null` on each navigation path —
+   *  that was tried and it missed three (the search bar's jump, a card's own
+   *  inspect/refresh link, and saving a profile, all of which move the selection
+   *  through `inspect`). A condition cannot miss a path.
+   *
+   *  Both the panel and the link that opens it read this rather than
+   *  `snippetFor`: the link is a toggle, and keyed on the raw value it went out
+   *  of step with the screen — navigate away (panel hidden, `snippetFor` still
+   *  set), come back, click "AI client config", and it toggled the invisible
+   *  panel off instead of opening it. */
+  /** Forget a panel that has stopped being displayable, so it does not come back
+   *  by itself. The gate below decides what is on screen; this decides what is
+   *  still intended, and they are different questions: without this, walking to
+   *  another database and back re-shows the panel, and withdrawing the MCP
+   *  permission and re-granting it puts a secret capability URL back on screen
+   *  with no operator action. Neither is something the operator asked for twice.
+   *
+   *  An effect rather than a `snippetFor = null` on each navigation path for the
+   *  same reason the gate is a condition: the path list was tried and it missed
+   *  three of them. This converges — after the write, both sides are null. */
+  $effect(() => {
+    if (snippetFor !== null && shownSnippetFor === null) snippetFor = null;
+  });
+  const shownSnippetFor = $derived(
+    snippetFor !== null &&
+      snippet !== null &&
+      mcpMode === 'local' &&
+      (currentProfile === null || snippetFor === currentProfile.name)
+      ? snippetFor
+      : null,
+  );
+  /** The panel's own note about why connecting may not work yet. Derived rather
+   *  than computed in the markup because `{@const}` may not be a child of a
+   *  plain element. */
+  const snippetServerLine = $derived(
+    shownSnippetFor === null ? null : snippetServerNote(mcp[shownSnippetFor]?.status),
+  );
   const current = $derived(selectedProfile ? (results[selectedProfile] ?? null) : null);
   const currentContext = $derived(current?.ok ? (current.context as ContextView) : null);
 
@@ -506,6 +551,15 @@
     if (!results[name]) void inspect(name);
   }
 
+  /** Back to the all-databases view. No profile is selected there, which is the
+   *  same state the app starts in: the cross-database comparison is what the
+   *  view is for, and a relation selected in one database's map has no meaning
+   *  in it. */
+  function showAllDatabases(): void {
+    selectedProfile = null;
+    selectedEntity = null;
+  }
+
   void refresh();
   void initMcp();
 </script>
@@ -518,8 +572,9 @@
          reporting per-profile state, and both readings collapsed into "so is
          MCP running?" — which the permission cannot answer, because it counts
          nothing. It is a setting, so it is in Settings; what is running is said
-         by the card whose server it is, and no aggregate is stated here (that
-         would put the same claim on two surfaces again). -->
+         where that profile is described (its card in the all-databases view, or
+         the bar above the workspace while it is selected), and no aggregate is
+         stated here (that would put the same claim on two surfaces again). -->
     <div class="top-actions">
       <button class="add" data-testid="settings-toggle" onclick={toggleSettings}>
         {showSettings ? 'Close' : 'Settings'}
@@ -618,36 +673,21 @@
     <SearchBar contexts={searchable} onjump={jumpTo} />
   {/if}
 
-  <OverviewCards
-    {profiles}
-    {results}
-    selected={selectedProfile}
-    {inspecting}
-    {mcpMode}
-    {mcpKnown}
-    {mcp}
-    {duplicatePending}
-    {rowAccessPending}
-    oninspect={(name) => void inspect(name)}
-    onselect={selectProfile}
-    ondelete={(name) => void remove(name)}
-    onrowaccess={(name, level) => void setRowAccess(name, level)}
-    onmcpstart={(name) => void mcpStart(name)}
-    onmcpstop={(name) => void mcpStop(name)}
-    onmcpoverride={(name) => void mcpStart(name, true)}
-    onmcpcancel={() => (duplicatePending = null)}
-    onmcpreassign={(name) => void mcpReassign(name)}
-    onmcpconfig={(name) => (snippetFor = snippetFor === name ? null : name)}
-  />
-
-  {#if mcpMode === 'local' && snippet !== null && snippetFor !== null}
+  <!-- See `shownSnippetFor`: on screen only for a profile the screen is
+       describing, so a panel cannot outlive a switch and offer alpha's URL under
+       beta's name. -->
+  {#if shownSnippetFor !== null && snippet !== null}
     <section class="snippets" data-testid="mcp-snippets">
       <div class="snippets-head">
         <strong>AI client config - {snippet.serverName}</strong>
         <button onclick={() => (snippetFor = null)}>close</button>
       </div>
-      {#if mcp[snippetFor]?.status !== 'running'}
-        <p class="form-hint">(server currently stopped - start it before connecting)</p>
+      <!-- Branched on the status, not on "is it running": with a bind failure the
+           panel stays open beside a badge reading "MCP port busy", and one
+           sentence for every non-running state contradicted it. See
+           `snippetServerNote`. -->
+      {#if snippetServerLine !== null}
+        <p class="form-hint">({snippetServerLine})</p>
       {/if}
       <div class="snippet-row">
         <span>Cursor (mcpServers JSON)</span>
@@ -678,65 +718,142 @@
     </section>
   {/if}
 
-  {#if selectedProfile}
-    <section class="workspace">
-      {#if inspecting === selectedProfile && !current}
-        <p data-testid="inspect-running">Introspecting {selectedProfile}...</p>
-      {:else if current && !current.ok}
-        <p class="error" data-testid="inspect-error">{current.error}</p>
-      {:else if current?.ok && currentContext}
-        <p class="stats" data-testid="inspect-stats">
-          {selectedProfile}: introspect {current.stats.introspectMs}ms - build {current.stats.buildMs}ms
-          - full {(current.stats.fullBytes / 1024).toFixed(1)}KiB - sent
-          {(current.stats.trimmedBytes / 1024).toFixed(1)}KiB context + {(
-            current.stats.aiViewsBytes / 1024
-          ).toFixed(1)}KiB AI views
-        </p>
-        <div class="split">
-          <SemanticMap
-            context={currentContext}
-            selected={selectedEntity}
-            onselect={(id) => (selectedEntity = id)}
-          />
-          {#if selectedEntity && selectedProfile}
-            <DetailPane
-              context={currentContext}
-              aiViews={current.aiViews}
-              selected={selectedEntity}
-              profile={selectedProfile}
-              rowAccess={currentProfile?.rowAccess ?? 'off'}
-              epoch={profileEpoch}
-              ondraft={addDraft}
-            />
-          {:else}
-            <!-- The sentence is a paragraph so it is capped like every other one;
-                 the aside itself must keep filling the pane, so the cap cannot go
-                 on the box. -->
-            <aside class="placeholder"><p>Click a relation on the map to see its compiled semantics - and what a default-configured kozou server hands your AI for it.</p></aside>
-          {/if}
-        </div>
-        {#if currentDrafts.length > 0}
-          <DraftPanel
-            drafts={currentDrafts}
-            status={draftStatusFor}
-            onremove={removeDraft}
-            onclear={clearCurrentDrafts}
-            oncopy={copyDrafts}
-            onsave={saveDrafts}
-          />
-        {/if}
-        <FunctionsPanel functions={currentContext.functions ?? []} aiViews={current.aiViews} />
-        <EnumsPanel enums={currentContext.enums} />
-      {:else}
-        <p class="empty-note">
-          {selectedProfile} is not inspected yet - use its card's inspect link{inspecting
-            ? ` (waiting: ${inspecting} is being inspected)`
-            : ''}.
-        </p>
-      {/if}
-    </section>
-  {/if}
+  <!-- The rail beside the working area, not a list of cards above it. The card
+       grid grew with the number of databases and took the top of the window with
+       it, which pushed the map and the detail pane down; the rail costs one line
+       per database and the working area gets the rest of the height.
 
+       Exactly one of the two views is mounted: the all-databases comparison, or
+       the profile being worked on. That is also what keeps the row-access and MCP
+       blocks (rendered by both the card and the profile bar) from appearing
+       twice on screen at once. -->
+  <div class="body">
+    <!-- `currentProfile?.name`, not `selectedProfile`: a profile can be selected
+         by name and no longer be in the list (the reconcile after a row-access
+         prompt drops one that was deleted under it), and the working area falls
+         back to the all-databases view in that state. Keying the rail on the
+         same value keeps `aria-current` on whatever is actually showing rather
+         than on nothing at all. -->
+    <ProfileRail
+      {profiles}
+      selected={currentProfile?.name ?? null}
+      onselect={selectProfile}
+      onall={showAllDatabases}
+    />
+    <div class="pane">
+      {#if currentProfile === null}
+        <!-- Every profile side by side: this is where annotation coverage is
+             comparable across databases, which the rail cannot do.
+
+             No scroll container of its own. It had one, and that was a defect of
+             exactly the shape the rail's floor exists to prevent: a shell-level
+             panel (Settings, or an open AI client config) takes its height out of
+             this row, and an `overflow-y: auto` box squeezed to 0px holds its
+             content in a scroll area with no visible part — measured, 427px of
+             cards unreachable by any scroll at a 1280x700 window with the config
+             panel open, while the rail beside it kept its floor. Growing the shell
+             instead is what this content did before the rail existed: it overflows
+             visibly, the page scrolls, and the cards are reachable. Which is the
+             accepted degradation the pane row below already documents. -->
+        <OverviewCards
+            {profiles}
+            {results}
+            {inspecting}
+            {mcpMode}
+            {mcpKnown}
+            {mcp}
+            {duplicatePending}
+            {rowAccessPending}
+            oninspect={(name) => void inspect(name)}
+            onselect={selectProfile}
+            ondelete={(name) => void remove(name)}
+            onrowaccess={(name, level) => void setRowAccess(name, level)}
+            onmcpstart={(name) => void mcpStart(name)}
+            onmcpstop={(name) => void mcpStop(name)}
+            onmcpoverride={(name) => void mcpStart(name, true)}
+            onmcpcancel={() => (duplicatePending = null)}
+            onmcpreassign={(name) => void mcpReassign(name)}
+          onmcpconfig={(name) => (snippetFor = shownSnippetFor === name ? null : name)}
+        />
+      {:else}
+        <ProfileBar
+          profile={currentProfile}
+          result={results[currentProfile.name]}
+          {inspecting}
+          {mcpMode}
+          {mcpKnown}
+          {mcp}
+          {duplicatePending}
+          {rowAccessPending}
+          oninspect={(name) => void inspect(name)}
+          ondelete={(name) => void remove(name)}
+          onrowaccess={(name, level) => void setRowAccess(name, level)}
+          onmcpstart={(name) => void mcpStart(name)}
+          onmcpstop={(name) => void mcpStop(name)}
+          onmcpoverride={(name) => void mcpStart(name, true)}
+          onmcpcancel={() => (duplicatePending = null)}
+          onmcpreassign={(name) => void mcpReassign(name)}
+          onmcpconfig={(name) => (snippetFor = shownSnippetFor === name ? null : name)}
+        />
+        <section class="workspace">
+          {#if inspecting === selectedProfile && !current}
+            <p data-testid="inspect-running">Introspecting {selectedProfile}...</p>
+          {:else if current && !current.ok}
+            <p class="error" data-testid="inspect-error">{current.error}</p>
+          {:else if current?.ok && currentContext}
+            <p class="stats" data-testid="inspect-stats">
+              {selectedProfile}: introspect {current.stats.introspectMs}ms - build {current.stats.buildMs}ms
+              - full {(current.stats.fullBytes / 1024).toFixed(1)}KiB - sent
+              {(current.stats.trimmedBytes / 1024).toFixed(1)}KiB context + {(
+                current.stats.aiViewsBytes / 1024
+              ).toFixed(1)}KiB AI views
+            </p>
+            <div class="split">
+              <SemanticMap
+                context={currentContext}
+                selected={selectedEntity}
+                onselect={(id) => (selectedEntity = id)}
+              />
+              {#if selectedEntity && selectedProfile}
+                <DetailPane
+                  context={currentContext}
+                  aiViews={current.aiViews}
+                  selected={selectedEntity}
+                  profile={selectedProfile}
+                  rowAccess={currentProfile?.rowAccess ?? 'off'}
+                  epoch={profileEpoch}
+                  ondraft={addDraft}
+                />
+              {:else}
+                <!-- The sentence is a paragraph so it is capped like every other one;
+                     the aside itself must keep filling the pane, so the cap cannot go
+                     on the box. -->
+                <aside class="placeholder"><p>Click a relation on the map to see its compiled semantics - and what a default-configured kozou server hands your AI for it.</p></aside>
+              {/if}
+            </div>
+            {#if currentDrafts.length > 0}
+              <DraftPanel
+                drafts={currentDrafts}
+                status={draftStatusFor}
+                onremove={removeDraft}
+                onclear={clearCurrentDrafts}
+                oncopy={copyDrafts}
+                onsave={saveDrafts}
+              />
+            {/if}
+            <FunctionsPanel functions={currentContext.functions ?? []} aiViews={current.aiViews} />
+            <EnumsPanel enums={currentContext.enums} />
+          {:else}
+            <p class="empty-note">
+              {selectedProfile} is not inspected yet - use the inspect link above{inspecting
+                ? ` (waiting: ${inspecting} is being inspected)`
+                : ''}.
+            </p>
+          {/if}
+        </section>
+      {/if}
+    </div>
+  </div>
 </main>
 
 <style>
@@ -925,6 +1042,24 @@
     font-size: 0.8em;
     margin: 0;
   }
+  /* The rail and the working area share the height the shell has left.
+     `min-height: 0` here is what lets the panes inside resolve a height (see the
+     note on `main`); `min-width: 0` on `.pane` below is the separate one that
+     stops a wide row grid from pushing the rail off the window. */
+  .body {
+    display: flex;
+    gap: 0.9rem;
+    flex: 1;
+    min-height: 0;
+  }
+  .pane {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+  }
   .workspace {
     display: flex;
     flex-direction: column;
@@ -951,10 +1086,55 @@
      which measure 208px at two profiles and 407px at five, so it would take nine
      or ten to fill the viewport on their own. What several profiles do is squeeze
      .workspace down onto this floor, which is a different thing from overflowing
-     it. */
+     it.
+
+     The columns: the rail takes 222px out of this row, and something has to pay
+     for it. Measured in the built app at 1280x840, a plain ratio made it the
+     detail pane — 470px down to 384px, with 29px of horizontal scrolling that
+     was not there before. That is the pane an operator edits in, made narrower by
+     a change whose purpose was to give the working surfaces more room.
+
+     So the detail column is stated as the width it had before the rail existed,
+     and the map absorbs the rail by construction. `(100vw - the shell's own
+     padding - this gap) / 2.6` is exactly what the old `1.6fr : 1fr` split gave
+     this column, which is why it is written as that arithmetic rather than as a
+     ratio refitted to one window: it names no rail, no gap beside the rail and
+     no panel above, so none of those moving can silently change it. Measured
+     after the change: 470px at 1280 wide, 623px at 1680, 362px at 1000 — the
+     pre-rail number at each. (`100vw` includes a classic vertical scrollbar, so
+     on a platform that reserves space for one this overshoots by scrollbar/2.6
+     while the page scrolls vertically; on macOS `100vw` measured equal to
+     `clientWidth` at every size. The map absorbs the difference either way.)
+
+     The floor is a `min()` for the same reason the maximum is arithmetic. A flat
+     300px floor plus the rail's 222px stopped fitting at about 582px of window
+     width, and below that the columns overflowed this row: measured, at 560px the
+     map column was 0px and the row overflowed by 21px, and at 540px the document
+     was 557px wide inside the window, so the PAGE scrolled sideways. Vertical page
+     scroll is the degradation this file accepts and documents; a sideways one is
+     not, and this row must not be a source of it. Both bounds are therefore
+     relative to the row as well: the detail column never asks for more than 62%
+     of it, and its floor never exceeds what it asks for, so the two tracks plus
+     the gap always fit. (Not a claim that the page never scrolls sideways: it does
+     at the default window when an error message contains a single unbreakable
+     token — measured 1318px of document in 1280px, from `inspect-error`, which
+     predates this change and is not fixed here. `max-width` caps a box, not a
+     token.)
+
+     The 62% is the map's floor, expressed from the other side. A flat 300px
+     detail floor let the map reach 0px: measured, the map column was 0.4px at a
+     582px window and 0px below it, while the detail pane kept 300px — the wrong
+     order to hard-code for an app whose subject is the map (`TRIAL.md` asks about
+     the map and calls the Data tab incidental). At and above ~1000px the arithmetic
+     is what binds and nothing changes; below it the map keeps 38% of the row.
+
+     None of this is the fix for the pane being narrow in the first place; the
+     width the editing surfaces actually need comes from collapsing the map for
+     the Data tab, which is a later step. */
   .split {
     display: grid;
-    grid-template-columns: minmax(0, 1.6fr) minmax(300px, 1fr);
+    --detail-w: min(calc((100vw - 3rem - 0.7rem) / 2.6), calc((100% - 0.7rem) * 0.62));
+    grid-template-columns: minmax(0, 1fr) minmax(min(300px, var(--detail-w)), var(--detail-w));
     grid-template-rows: minmax(0, 1fr);
     gap: 0.7rem;
     flex: 1;
