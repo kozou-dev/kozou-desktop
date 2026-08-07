@@ -4,12 +4,17 @@
 // start/stop/restore transitions, stop-reason mapping, autoStart intent
 // semantics, duplicate blocking, port-busy handling, and the env-only
 // secret channel.
+//
+// Bridge locators are here too, and for the same reason: what has to hold is
+// that a locator exists exactly while a server does, which is a statement
+// about every exit path rather than about the writer.
 
 import { EventEmitter } from 'node:events';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { McpLocatorWriter } from '../src/main/mcpLocatorFile.js';
 import { McpServerManager, type McpWorkerFork, type McpWorkerHandle } from '../src/main/mcpServerManager.js';
 import { ProfileStore, type Encryptor } from '../src/main/profileStore.js';
 import type { McpStatusEntry } from '../src/shared/types.js';
@@ -24,6 +29,10 @@ class FakeChild implements McpWorkerHandle {
   readonly em = new EventEmitter();
   readonly messages: unknown[] = [];
   killed = false;
+  /** Set to model a child that ignores kill() — the manager's stop wait is a
+   *  timeout, so this is the path where it gives up rather than observes an
+   *  exit. */
+  ignoresKill = false;
   constructor(
     readonly modulePath: string,
     readonly options: { env: Record<string, string>; serviceName: string; stdio: 'pipe' },
@@ -33,7 +42,7 @@ class FakeChild implements McpWorkerHandle {
   }
   kill(): boolean {
     this.killed = true;
-    queueMicrotask(() => this.em.emit('exit', 0));
+    if (!this.ignoresKill) queueMicrotask(() => this.em.emit('exit', 0));
     return true;
   }
   once(event: 'message' | 'exit', listener: (arg: never) => void): unknown {
@@ -61,10 +70,38 @@ class FakeChild implements McpWorkerHandle {
   }
 }
 
+/** Records what the manager publishes, and keeps the same "present exactly
+ *  while running" bookkeeping the file writer does. */
+class FakeLocators implements McpLocatorWriter {
+  readonly published = new Map<string, { port: number; path: string; generation: string }>();
+  readonly log: string[] = [];
+  failWrite: string | undefined;
+  private counter = 0;
+
+  write(entry: { id: string; port: number; path: string }): string {
+    if (this.failWrite !== undefined) throw new Error(this.failWrite);
+    const generation = `gen${++this.counter}`;
+    this.published.set(entry.id, { port: entry.port, path: entry.path, generation });
+    this.log.push(`write:${entry.id}`);
+    return generation;
+  }
+
+  remove(id: string, generation: string): void {
+    this.log.push(`remove:${id}`);
+    if (this.published.get(id)?.generation === generation) this.published.delete(id);
+  }
+
+  clearAll(): void {
+    this.published.clear();
+    this.log.push('clearAll');
+  }
+}
+
 function harness(): {
   store: ProfileStore;
   manager: McpServerManager;
   children: FakeChild[];
+  locators: FakeLocators;
   entry: (name: string) => McpStatusEntry | undefined;
 } {
   const dir = mkdtempSync(join(tmpdir(), 'kozou-desktop-mcp-test-'));
@@ -75,9 +112,10 @@ function harness(): {
     children.push(child);
     return child;
   };
-  const manager = new McpServerManager(store, () => '/out/mcpServerWorker.js', fork);
+  const locators = new FakeLocators();
+  const manager = new McpServerManager(store, () => '/out/mcpServerWorker.js', fork, locators);
   store.setMcpMode('local');
-  return { store, manager, children, entry: (name) => manager.status().find((s) => s.profile === name) };
+  return { store, manager, children, locators, entry: (name) => manager.status().find((s) => s.profile === name) };
 }
 
 const BASE = { url: 'postgresql://u@h:5432/db', schemas: ['public'] };
@@ -162,6 +200,113 @@ describe('McpServerManager', () => {
     expect(e.autoStart).toBe(true);
   });
 
+  it('publishes a locator while running and withdraws it on every exit path', async () => {
+    const { store, manager, children, locators, entry } = harness();
+    store.upsert({ name: 'a', ...BASE });
+    const alloc = store.ensureLocalMcpAllocation('a');
+
+    const started = manager.start('a');
+    // Nothing is published while the server is only starting.
+    expect(locators.published.size).toBe(0);
+    children[0]!.replyOk(alloc.port);
+    await started;
+    expect([...locators.published.keys()]).toEqual([alloc.bridgeId]);
+    expect(locators.published.get(alloc.bridgeId)).toMatchObject({ port: alloc.port, path: alloc.path });
+
+    // Explicit stop.
+    await manager.stop('a');
+    expect(locators.published.size).toBe(0);
+
+    // Crash.
+    const again = manager.start('a');
+    children[1]!.replyOk(alloc.port);
+    await again;
+    expect(locators.published.size).toBe(1);
+    children[1]!.crash(1);
+    expect(entry('a')?.status).toBe('stopped-crashed');
+    expect(locators.published.size).toBe(0);
+
+    // Quit sweep: synchronous, because the exit handler may not run.
+    const third = manager.start('a');
+    children[2]!.replyOk(alloc.port);
+    await third;
+    manager.killAllSync();
+    expect(locators.published.size).toBe(0);
+  });
+
+  it('publishes nothing when a stop lands after the worker confirmed but before the start returns', async () => {
+    const { store, manager, children, locators, entry } = harness();
+    store.upsert({ name: 'a', ...BASE });
+    const pending = manager.start('a');
+    const child = children[0]!;
+    child.replyOk(3335); // the worker is up...
+    await manager.stop('a'); // ...and the user stops it in the same tick
+    const outcome = await pending;
+    expect(outcome.outcome).toBe('error');
+    expect(entry('a')?.status).toBe('stopped');
+    // The window this closes: a locator naming a server that is already gone.
+    expect(locators.published.size).toBe(0);
+    expect(child.killed).toBe(true);
+  });
+
+  it('fails the start when the locator cannot be published', async () => {
+    const { store, manager, children, locators, entry } = harness();
+    store.upsert({ name: 'a', ...BASE });
+    locators.failWrite = 'read-only filesystem';
+    const pending = manager.start('a');
+    children[0]!.replyOk(3335);
+    const outcome = await pending;
+    expect(outcome.outcome).toBe('error');
+    expect(outcome.error).toMatch(/could not publish the bridge locator: read-only filesystem/);
+    // The server it could not advertise is not left running.
+    expect(children[0]!.killed).toBe(true);
+    expect(entry('a')?.status).toBe('stopped');
+    expect(locators.published.size).toBe(0);
+  });
+
+  it('withdraws the locator even when the worker ignores the kill', async () => {
+    // The stop wait is a timeout, not proof of death, and on the delete path
+    // the entry is dropped right after it — so a later exit would find no
+    // entry and the locator would outlive the app's decision to stop serving.
+    vi.useFakeTimers();
+    try {
+      const { store, manager, children, locators } = harness();
+      store.upsert({ name: 'a', ...BASE });
+      const started = manager.start('a');
+      const child = children[0]!;
+      child.replyOk(3335);
+      await started;
+      expect(locators.published.size).toBe(1);
+
+      child.ignoresKill = true;
+      const removing = manager.onProfileRemoved('a');
+      await vi.advanceTimersByTimeAsync(5_000);
+      await removing;
+      expect(child.killed).toBe(true);
+      expect(locators.published.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives a recreated profile a new locator id, so a stale entry cannot resolve', async () => {
+    const { store, manager, children, locators } = harness();
+    store.upsert({ name: 'a', ...BASE });
+    const first = store.ensureLocalMcpAllocation('a');
+    const started = manager.start('a');
+    children[0]!.replyOk(first.port);
+    await started;
+    expect(locators.published.has(first.bridgeId)).toBe(true);
+
+    await manager.onProfileRemoved('a');
+    store.remove('a');
+    expect(locators.published.size).toBe(0);
+
+    store.upsert({ name: 'a', ...BASE });
+    const second = store.ensureLocalMcpAllocation('a');
+    expect(second.bridgeId).not.toBe(first.bridgeId);
+  });
+
   it('maps EADDRINUSE to error-port-busy; reassign moves the port and needs a stopped server', async () => {
     const { store, manager, children, entry } = harness();
     store.upsert({ name: 'a', ...BASE });
@@ -210,7 +355,7 @@ describe('McpServerManager', () => {
       child.replyOk(0);
       return child;
     };
-    const manager = new McpServerManager(store, () => '/out/mcpServerWorker.js', fork);
+    const manager = new McpServerManager(store, () => '/out/mcpServerWorker.js', fork, new FakeLocators());
     store.setMcpMode('local');
     store.upsert({ name: 'bad', url: 'postgresql://u:pw@h:5432/db', schemas: ['public'] });
     store.upsert({ name: 'dup', url: 'postgresql://u@h2:5432/db', schemas: ['public'] });

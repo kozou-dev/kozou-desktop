@@ -40,6 +40,33 @@ const ELECTRON_NET_IMPORT_RE =
 const SCAN_DIRS = ['src'];
 const EXTENSIONS = new Set(['.ts', '.svelte', '.html', '.css', '.js', '.mjs', '.cjs']);
 
+// The stdio bridge is the one part of the app whose whole job is an outbound
+// HTTP call (to 127.0.0.1, see src/bridge/loopback.ts), so the blanket
+// "no network module" rule cannot apply to it. What replaces it is narrower
+// and, unlike the blanket rule, aimed at the actual invariant BR-3: the
+// bridge must not LISTEN.
+//
+// This is the auxiliary check, not the load-bearing one. A specifier scan
+// cannot tell a client from a server — both use the same module — so the
+// evidence that the bridge holds no listening socket is the runtime
+// observation in test/bridgeListen.test.ts, which reads the real process's
+// sockets. What is checkable statically is kept here: only one file may
+// import the module at all, and no bridge file may name a server-construction
+// or listener API.
+const BRIDGE_DIR = 'src/bridge';
+/** The single bridge file allowed to import a network module. */
+const BRIDGE_HTTP_CLIENT = 'src/bridge/httpClient.ts';
+const BRIDGE_SERVER_TOKENS = [
+  ['createServer', 'server construction'],
+  ['.listen(', 'binding a listener'],
+  ['Server(', 'server construction'],
+  ['node:net', 'raw socket module'],
+  ['node:tls', 'raw socket module'],
+  ['node:http2', 'server-capable module'],
+  ['node:dgram', 'datagram module'],
+  ['WebSocket', 'bidirectional socket'],
+];
+
 let failures = 0;
 const violation = (msg) => {
   console.error(`EGRESS VIOLATION ${msg}`);
@@ -55,16 +82,32 @@ function scan(dir) {
     }
     if (![...EXTENSIONS].some((ext) => full.endsWith(ext))) continue;
     const text = readFileSync(full, 'utf8');
+    const relative = full.slice(ROOT.length);
+    const inBridge = relative.startsWith(BRIDGE_DIR);
     for (const [token, why] of FORBIDDEN) {
       if (text.includes(token)) violation(`${full}: "${token}" (${why})`);
     }
-    if (NETWORK_MODULE_RE.test(text)) {
+    if (inBridge) {
+      for (const [token, why] of BRIDGE_SERVER_TOKENS) {
+        if (text.includes(token)) violation(`${full}: "${token}" (${why}) — the bridge never listens`);
+      }
+      if (relative !== BRIDGE_HTTP_CLIENT && NETWORK_MODULE_RE.test(text)) {
+        violation(`${full}: only ${BRIDGE_HTTP_CLIENT} may import a network module in the bridge`);
+      }
+    } else if (NETWORK_MODULE_RE.test(text)) {
       violation(`${full}: imports a network-capable module (http/https/http2/net/tls/dgram)`);
     }
     if (ELECTRON_NET_IMPORT_RE.test(text)) {
       violation(`${full}: imports Electron's net module (network capability)`);
     }
   }
+}
+
+// The carve-out above is only sound while the file it names exists and does
+// what it says: if httpClient.ts is renamed or deleted, every other bridge
+// file silently inherits permission to import node:http.
+if (!existsSync(join(ROOT, BRIDGE_HTTP_CLIENT))) {
+  violation(`${BRIDGE_HTTP_CLIENT} is missing — the bridge network-module carve-out now names nothing`);
 }
 
 for (const dir of SCAN_DIRS) scan(join(ROOT, dir));

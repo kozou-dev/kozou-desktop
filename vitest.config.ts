@@ -10,6 +10,7 @@ export default defineConfig({
       'test/mcpServer.integration.test.ts',
       'test/data.integration.test.ts',
       'test/comment.integration.test.ts',
+      'test/bridge.integration.test.ts',
     ],
   },
 });

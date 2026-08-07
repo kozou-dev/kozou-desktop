@@ -27,3 +27,16 @@ export function nextFreePort(taken: Iterable<number>, start = MCP_PORT_START): n
 export function generateMcpPath(): string {
   return `/mcp-${randomBytes(16).toString('hex')}`;
 }
+
+/** Random 128-bit locator id. Unlike the capability path this one is safe to
+ *  put in an AI client's config — it names a file, and reading that file
+ *  still requires being this user (mode 0600). */
+export function generateBridgeId(): string {
+  return randomBytes(16).toString('hex');
+}
+
+/** Random 64-bit generation: a new value each time a locator is written, so
+ *  a stop can recognize whether the file on disk is still its own. */
+export function generateLocatorGeneration(): string {
+  return randomBytes(8).toString('hex');
+}

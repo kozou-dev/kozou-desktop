@@ -21,6 +21,7 @@
     "src/main/**/*.ts",
     "src/preload/**/*.ts",
     "src/worker/**/*.ts",
+    "src/bridge/**/*.ts",
     "src/shared/**/*.ts",
     "src/renderer/src/lib/graph.ts",
     "src/renderer/src/lib/coverage.ts",
