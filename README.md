@@ -2,7 +2,7 @@
 
 **Status: experimental — validation-first MVP, past its first external trial. Pre-releases (`v0.3.0-alpha.1`) are run from source; no binaries are distributed.**
 
-A desktop app that renders the **semantic model** [kozou](https://kozou.org) compiles from your PostgreSQL schema — table/column COMMENTs with `@ai`/`@policy` tags, views and their lineage, foreign-key relationships and their documented meaning — as a human-facing visual map, across multiple databases. It is **read-only by default**: row browsing and row editing are per-profile opt-ins, and the introspection and MCP surfaces stay read-only whether or not you enable them. (A profile card shows its row-access level and offers each opt-in separately — browsing first, editing as its own approval — and a **Data** tab then appears on the detail pane.) Comments can be **edited into `COMMENT ON` statements the app hands back to you** — it applies none of them, so that path needs no grant and reaches no database.
+A desktop app that renders the **semantic model** [kozou](https://kozou.org) compiles from your PostgreSQL schema — table/column COMMENTs with `@ai`/`@policy` tags, views and their lineage, foreign-key relationships and their documented meaning — as a human-facing visual map, across multiple databases. It is **read-only by default**: row browsing and row editing are per-profile opt-ins, and the introspection and MCP surfaces stay read-only whether or not you enable them. (A database's row-access level is shown wherever the database is described — the bar above the map when it is selected, and its card in the **All databases** view — and each opt-in is offered separately, browsing first, editing as its own approval; a **Data** tab then appears on the detail pane.) Comments can be **edited into `COMMENT ON` statements the app hands back to you** — it applies none of them, so that path needs no grant and reaches no database.
 
 AI agents already see this model through kozou's MCP describe surface. Generic DB clients show raw tables and none of the semantics. This app is the missing human-facing side: *see what your AI sees.*
 
@@ -12,9 +12,9 @@ AI agents already see this model through kozou's MCP describe surface. Generic D
   - **Semantic map** — tables, views, FK relationships (with their documented meaning), view lineage, and `@ai`/`@policy`/RLS badges, laid out as a graph.
   - **Detail pane** — the full compiled semantics of a relation, including join suggestions and example queries.
   - **AI view** — the payload an AI agent receives from the MCP describe tools of a **default-configured** kozou server for that relation: same functions, same serialization. Server-side opt-ins (RPC exposure config, privilege-aware annotations) are not reproduced yet.
-  - **Cross-database overview** — per-profile cards with relation counts and annotation coverage.
+  - **Cross-database overview** — the **All databases** view at the top of the rail: a card per database with relation counts and annotation coverage, side by side.
   - **Cross-database search** — find a table/view by name, comment, or `@ai` note across every open database and jump to it.
-  - **Row browsing (opt-in, off by default)** — once a profile is opted in through a native approval dialog, the detail pane gains a **Data** tab: rows of the selected table or view, sorted by column, walked with keyset cursors. Reads run inside a `READ ONLY` transaction; a relation without a primary key has no total order, so it shows a single page and says so. (Sorting covers every column whose name the REST layer's comma-separated sort grammar can express — a name containing a comma is left out of the control rather than offered and rejected.) The pager counts the steps of the walk rather than naming an absolute page: there is no row count behind it, so nothing there licenses arithmetic about how many rows lie before the ones on screen. This pane is a **preview, not a viewer** — large values are cut before the rows leave the database connection (1024 characters or bytes; a larger json value is dropped) and every cut is marked in the cell rather than passed off as the value. The same limit applies to the page cursors, which carry the sort values of the row they stop at: sorting by a column whose values are too large to fit a cursor ends the walk, and the pane says so instead of offering a hop it cannot make. Every card shows its profile's current row-access level whether or not anything is granted, and says in words what the level means: while off, that no row query runs at that level and that editing carries an approval of its own; once granted, that the Data tab is where the grant is used and that your database decides what that connection may see or change. A profile edit that repoints it at a different database, different schemas, or a different credential state drops the grant back to off, so the next browse asks for approval again.
+  - **Row browsing (opt-in, off by default)** — once a profile is opted in through a native approval dialog, the detail pane gains a **Data** tab: rows of the selected table or view, sorted by column, walked with keyset cursors. Reads run inside a `READ ONLY` transaction; a relation without a primary key has no total order, so it shows a single page and says so. (Sorting covers every column whose name the REST layer's comma-separated sort grammar can express — a name containing a comma is left out of the control rather than offered and rejected.) The pager counts the steps of the walk rather than naming an absolute page: there is no row count behind it, so nothing there licenses arithmetic about how many rows lie before the ones on screen. This pane is a **preview, not a viewer** — large values are cut before the rows leave the database connection (1024 characters or bytes; a larger json value is dropped) and every cut is marked in the cell rather than passed off as the value. The same limit applies to the page cursors, which carry the sort values of the row they stop at: sorting by a column whose values are too large to fit a cursor ends the walk, and the pane says so instead of offering a hop it cannot make. A database's current row-access level is shown whether or not anything is granted — on the bar above the map while it is selected, and on its card in the **All databases** view — and says in words what the level means: while off, that no row query runs at that level and that editing carries an approval of its own; once granted, that the Data tab is where the grant is used and that your database decides what that connection may see or change. A profile edit that repoints it at a different database, different schemas, or a different credential state drops the grant back to off, so the next browse asks for approval again.
   - **Row editing (a second opt-in, also off by default)** — a browsing grant does not carry it: editing is its own level, approved through its own native dialog, and the Data tab gains write controls only once it is in force. A row is inserted, edited or deleted one statement at a time, each in its own transaction. Every field answers one of three ways — leave it to the database, send a value, or send null — so a generated key can be generated and a nullable column can be cleared, and an edit sends only the fields you changed. Editing starts by re-reading the row in full, so a value the browse pane had to shorten is never written back shortened. What can be edited is deliberately narrow: a view is not offered write controls (kozou refuses a write to one), and neither is a table without a primary key or a row whose key this app cannot put in a request — including a key too large to have travelled in full, where what is on screen is only its beginning and could belong to another row. A field whose stored value has no text form this app can write back (a byte array, an array, a geometric type) is shown as read-only rather than as a rendering you could accidentally save. Refusals come back as fixed sentences (permission denied, no matching row, conflicts with existing data), which is also why they never quote the values involved; the database has the final say on all of it, and a value's type is checked by kozou before any statement runs. There is no optimistic concurrency: if someone else changes a field between your opening the editor and saving, your value wins.
   - **Comment drafting (no opt-in, because it touches no database)** — the Semantics tab can edit the COMMENT of a relation or a column and hand you back the `COMMENT ON` statement. It never runs one: the statements collect in a panel you copy or save as a `.sql` file, and you apply them the way you apply any other schema change. The text box is seeded with the comment **exactly as it stands in the database**, not with the rendered description above it — kozou lifts `@widget:`/`@example:` blocks out of that field, so editing what you see there would silently delete them (there is a test that performs that mistake against a real database and watches the tag disappear). A materialized view is named as one, because `COMMENT ON VIEW` is an error against it; if the app cannot read which kind a view is, it offers no statement for the view rather than guessing. Drafts live for the session and belong to the profile they were written against.
 - **Is not**: a chat client (bring your own — Claude Desktop, Cursor, etc. connect to kozou over MCP), a migration tool, or a general DB client. It is not a schema editor either: schema and COMMENTs stay in SQL/Git, which is why the comment editor hands you a statement instead of applying one.
@@ -37,8 +37,14 @@ CSP for hot reload — prefer `pnpm start` for a trial.
 
 Then click **+ Add database**, paste a read-only PostgreSQL connection URL
 (`postgresql://user:password@host:5432/db`), list the schemas to include, and
-press **Save profile**. Add a second database the same way and use the search
-box to move between them.
+press **Save profile**. Add a second database the same way.
+
+Databases are listed in the rail down the left, one line each, and clicking one
+opens it: a bar describing that database — its connection, its row-access level,
+its MCP row — above the map and the detail pane. **All databases** at the top of
+the rail switches to a card per database side by side, which is where annotation
+coverage is comparable across them. The search box above spans every database
+that has been introspected, whichever of the two you are looking at.
 
 Connect with a **least-privilege role**. On Supabase, do **not** use
 `service_role`/`postgres` (they bypass row-level security). A read-only role is
@@ -61,9 +67,13 @@ default**, and read-only regardless of anything else you have opted into.
 
 1. In **Settings**, tick **Allow profiles to serve MCP on loopback**. Ticking it
    starts nothing — it lets a profile be started.
-2. On a profile card, click **start** — the badge becomes `MCP on :<port>`.
+2. On the database's own row — the bar above the map when it is selected, or its
+   card in the **All databases** view — click **start**; the badge becomes
+   `MCP on :<port>`.
 3. Click **AI client config** and copy the form your client wants — the panel
-   offers three.
+   offers three. The URL it holds is one database's, so moving to a different
+   database closes it; it stays while you are in **All databases**, where every
+   database is on screen.
 
 `mcpServers` JSON, for Cursor:
 
@@ -125,9 +135,9 @@ Worth knowing before you paste:
   is the kozou CLI's own default) and never silently renumbered, because the
   configs you pasted name it. A bind conflict is reported as `MCP port busy`
   with a **move port** control instead of being resolved behind your back, and
-  while that lasts the card stops offering to open the config panel (a panel
-  you already had open keeps showing the snippet, and says the server is not
-  running).
+  while that lasts the database's MCP row stops offering to open the config panel
+  (a panel you already had open keeps showing the snippet, and says the server is
+  not running).
 - **The path is a capability, not authentication.** Any process on your machine
   that can read your AI client's config files can read schema *metadata*
   through it — never row data. Moving the port keeps the same path, so a config
@@ -139,9 +149,9 @@ Worth knowing before you paste:
   defaults to — local at the time of writing, which connects immediately.
 - **A database already served from elsewhere** can be marked as such on the
   profile: *a remote MCP server already serves this database*. That declaration
-  does two things, and neither one depends on the permission above. Its card
-  carries `served remotely (declared)` whether or not this app is allowed to
-  serve — what you recorded is about another server, so our own setting does not
+  does two things, and neither one depends on the permission above. That
+  database's own row carries `served remotely (declared)` whether or not this app
+  is allowed to serve — what you recorded is about another server, so our own setting does not
   change it. And starting a local server for a database a declared remote one
   appears to cover stops to warn you first: two servers could then answer the
   same question differently, since this app does not reproduce a server's own

@@ -98,7 +98,9 @@ async function launchWithProfile(name: string): Promise<{ app: ElectronApplicati
   await page.getByPlaceholder('postgresql://user:password@host:5432/db').fill(url!);
   await page.getByPlaceholder('schemas (comma-separated)').fill('public');
   await page.getByRole('button', { name: 'Save profile' }).click();
-  await expect(page.getByTestId(`card-${name}`)).toBeVisible({ timeout: 15_000 });
+  // The rail, not the card: saving auto-inspects, which selects the profile, and
+  // the card grid is the all-databases view — not on screen while one is selected.
+  await expect(page.getByTestId(`rail-${name}`)).toBeVisible({ timeout: 15_000 });
   await expect(page.getByTestId('inspect-stats')).toBeVisible({ timeout: 60_000 });
 
   await app.evaluate(({ dialog }) => {

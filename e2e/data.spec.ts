@@ -105,7 +105,9 @@ test('row data: every channel refused while off, granted by native approval, ful
   await page.getByPlaceholder('postgresql://user:password@host:5432/db').fill(url!);
   await page.getByPlaceholder('schemas (comma-separated)').fill('public');
   await page.getByRole('button', { name: 'Save profile' }).click();
-  await expect(page.getByTestId('card-rows')).toBeVisible({ timeout: 15_000 });
+  // The rail, not the card: saving auto-inspects, which selects the profile, and
+  // the card grid is the all-databases view — not on screen while one is selected.
+  await expect(page.getByTestId('rail-rows')).toBeVisible({ timeout: 15_000 });
 
   // --- 1. all five channels are refused while the profile is off ------------
   const offCalls: Call[] = [

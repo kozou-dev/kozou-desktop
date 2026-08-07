@@ -10,13 +10,15 @@
 // which the value cannot answer because it counts nothing. Rewording it a third
 // time was not the fix. The permission now lives in Settings, where it is asked
 // as a permission and nothing in the header speaks for it; what is running is
-// said only by the card whose server it is.
+// said only where that profile is described — the card in the all-databases
+// view, or the bar above the workspace while that profile is the one selected.
+// Those two are one component (McpBlock.svelte), and never both on screen.
 //
 // Kept here as pure functions and constants so the copy is unit-testable: a
 // claim drifting back onto the wrong surface is exactly the kind of thing that
 // regresses silently in markup.
 
-import type { RowAccess } from '../../../shared/types.js';
+import type { McpServerStatus, RowAccess } from '../../../shared/types.js';
 
 /** The Settings control's label. It names what the permission decides — that a
  *  profile is *allowed* to start a server — and deliberately not what any
@@ -32,10 +34,10 @@ export const MCP_ALLOW_LABEL = 'Allow profiles to serve MCP on loopback';
 export const MCP_ALLOW_NOTE =
   "Nothing listens until you start a profile's server, one profile at a time. Turning this off asks every server that is up to stop, and refuses further starts.";
 
-/** What a card says about its own MCP server while no profile may run one.
+/** What a profile's MCP row says while no profile may run a server.
  *  "not allowed" rather than "off": 'off' reads as a state a server is in, and
  *  this row is about a server that cannot be started yet. It names the surface
- *  that owns the permission because the card cannot change it. */
+ *  that owns the permission because the row cannot change it. */
 export const MCP_NOT_ALLOWED = 'MCP not allowed - see Settings';
 
 /** The confirmation shown when the permission is withdrawn while servers are
@@ -53,6 +55,8 @@ export function mcpStopWarning(count: number): string {
   return `turn this off? ${count} server${count === 1 ? '' : 's'} running or starting will be asked to stop.`;
 }
 
+/** Named for the card, which was the only surface that carried these notes when
+ *  this file was written; the profile bar now renders the same ones. */
 export type CardNote = { text: string; cls: string } | null;
 
 /** The declaration badge's text. "(declared)" is not padding: the app never
@@ -61,7 +65,7 @@ export type CardNote = { text: string; cls: string } | null;
  *  at all, so there is not even an address to have checked. */
 export const REMOTE_DECLARED = 'served remotely (declared)';
 
-/** What a profile card says about a remote server serving its database.
+/** What a profile's row says about a remote server serving its database.
  *
  *  Mode-independent by construction — it takes the declaration and nothing
  *  else. What something else serves does not stop being what the operator
@@ -72,7 +76,7 @@ export const REMOTE_DECLARED = 'served remotely (declared)';
  *  that has nothing to do with it.
  *
  *  No declaration returns null, because silence is not a claim. Saying "no
- *  serving server declared" made the card speak about a database it knows
+ *  serving server declared" made the row speak about a database it knows
  *  nothing about: an operator not having recorded anything is not evidence that
  *  nothing serves it. */
 export function servingNote(declared: boolean): CardNote {
@@ -117,5 +121,31 @@ export function rowAccessNote(level: RowAccess): string {
       return 'The Data tab of a selected relation reads rows over the connection this profile uses; your database decides what it may see. Editing needs an approval of its own.';
     default:
       return 'This app runs no row queries while this is off. Browsing needs your approval, and editing needs an approval of its own.';
+  }
+}
+
+/** The line under the AI-client config snippets that says why connecting may not
+ *  work yet, or null when the server is up and there is nothing to warn about.
+ *
+ *  Branched on the status because one sentence for everything was false in a
+ *  reachable state: the panel stays open when a start fails, and
+ *  "server currently stopped - start it before connecting" then contradicted the
+ *  badge beside it ("MCP port busy") and sent the operator to do the one thing
+ *  that cannot work — a start re-fails while a foreign process holds the port,
+ *  and the way out is to move the port. `blocked-duplicate` is the same shape:
+ *  starting was refused, not attempted, so "start it" understates what it takes.
+ *
+ *  Nothing here says the port is free, or that the other process is malicious, or
+ *  what it is: the app knows only that its own bind failed. */
+export function snippetServerNote(status: McpServerStatus | undefined): string | null {
+  switch (status) {
+    case 'running':
+      return null;
+    case 'error-port-busy':
+      return 'another process is on this port - this profile cannot serve until you move its port, so this config would point your client at something else';
+    case 'blocked-duplicate':
+      return 'this profile is not serving - starting it was refused because a remote MCP server is declared for the same database';
+    default:
+      return 'server currently stopped - start it before connecting';
   }
 }
