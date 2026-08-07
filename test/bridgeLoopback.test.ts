@@ -7,6 +7,7 @@
 // guard cannot be tightened into something that rejects the real thing.
 
 import { describe, expect, it } from 'vitest';
+import { requestOptionsFor } from '../src/bridge/httpClient.js';
 import { ALLOWED_LOOPBACK_HOSTS, assertLoopbackTarget } from '../src/bridge/loopback.js';
 
 describe('assertLoopbackTarget', () => {
@@ -44,6 +45,22 @@ describe('assertLoopbackTarget', () => {
       expect(() => assertLoopbackTarget(target)).toThrow(/refusing/);
     });
   }
+
+  it('hands the request an address it can actually resolve', () => {
+    // The guard allows ::1, and WHATWG spells that host "[::1]" — which
+    // http.request tries to resolve as a NAME and fails on. A guard that
+    // permits what the client cannot reach is a guard about nothing.
+    expect(requestOptionsFor(assertLoopbackTarget('http://[::1]:3335/mcp-x'))).toEqual({
+      host: '::1',
+      port: '3335',
+      path: '/mcp-x',
+    });
+    expect(requestOptionsFor(assertLoopbackTarget('http://127.0.0.1:3335/mcp-x'))).toEqual({
+      host: '127.0.0.1',
+      port: '3335',
+      path: '/mcp-x',
+    });
+  });
 
   it('refuses credentials even on a loopback host', () => {
     // The server has no authentication; a credential in the target is either

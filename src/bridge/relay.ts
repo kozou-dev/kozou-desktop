@@ -26,7 +26,9 @@
 // Messages are relayed one at a time. Sequential ordering is what guarantees
 // the session id exists before the second request needs it, and a describe
 // server has no long-running call that would make head-of-line waiting
-// matter.
+// matter. The cost, stated rather than discovered later: a message sent while
+// an earlier one is still in flight waits for it — including a cancellation
+// notification, which therefore cannot overtake the request it cancels.
 
 export type RelayReply = {
   status: number;

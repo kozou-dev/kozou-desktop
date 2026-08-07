@@ -713,7 +713,8 @@
         Claude Desktop cannot reach this server: its custom connectors are opened from
         Anthropic's cloud and need a publicly reachable https address, and its own config
         file launches local commands rather than connecting to a URL. Reaching it from
-        there needs a local stdio bridge, which this app does not provide.
+        there needs a local stdio bridge. This app now contains one, but does not hand
+        you an entry for it yet - nothing here has been run against Claude Desktop.
       </p>
     </section>
   {/if}

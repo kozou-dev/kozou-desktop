@@ -34,6 +34,19 @@ export function createRelayClient(target: string): RelayClient {
   };
 }
 
+/** Request options for a validated target.
+ *
+ *  The bracket strip is load-bearing rather than cosmetic: WHATWG serializes
+ *  an IPv6 host as "[::1]", and `http.request` treats that literally and
+ *  fails to resolve it (measured: getaddrinfo ENOTFOUND [::1]). BR-1 allows
+ *  ::1, so the client has to be able to reach what the guard permits. */
+export function requestOptionsFor(url: URL): { host: string; port: string; path: string } {
+  const host = url.hostname.startsWith('[') && url.hostname.endsWith(']')
+    ? url.hostname.slice(1, -1)
+    : url.hostname;
+  return { host, port: url.port, path: `${url.pathname}${url.search}` };
+}
+
 function send(
   method: 'POST' | 'DELETE',
   target: string,
@@ -47,9 +60,7 @@ function send(
         // Host and port come from the validated URL; node:http does not
         // follow redirects, so a 3xx is reported to the caller as-is and
         // never becomes a second connection to somewhere else.
-        host: url.hostname,
-        port: url.port,
-        path: `${url.pathname}${url.search}`,
+        ...requestOptionsFor(url),
         method,
         headers,
       },

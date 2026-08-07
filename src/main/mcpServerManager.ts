@@ -218,6 +218,17 @@ export class McpServerManager {
       return { outcome: 'error', error: started.error, status: this.status() };
     }
 
+    // A stop can land between the worker's confirmation and this line — the
+    // kill sweep, a profile edit, a mode switch, or an explicit stop, all of
+    // which run while this await is outstanding. When it does, the exit
+    // handler above has already recorded the stop and cleared the child, so
+    // there is nothing to advertise: publishing here would leave a locator
+    // naming a server that is gone, and marking 'running' would overwrite a
+    // stop that already happened.
+    if (entry.child === undefined || entry.stopReason !== undefined) {
+      return { outcome: 'error', error: 'the server was stopped while starting', status: this.status() };
+    }
+
     // Publish the locator only now, and treat a failure to publish as a
     // failure to start. The invariant "a locator exists exactly while its
     // server is listening" has to hold in both directions: a running server

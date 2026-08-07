@@ -230,6 +230,21 @@ describe('McpServerManager', () => {
     expect(locators.published.size).toBe(0);
   });
 
+  it('publishes nothing when a stop lands after the worker confirmed but before the start returns', async () => {
+    const { store, manager, children, locators, entry } = harness();
+    store.upsert({ name: 'a', ...BASE });
+    const pending = manager.start('a');
+    const child = children[0]!;
+    child.replyOk(3335); // the worker is up...
+    await manager.stop('a'); // ...and the user stops it in the same tick
+    const outcome = await pending;
+    expect(outcome.outcome).toBe('error');
+    expect(entry('a')?.status).toBe('stopped');
+    // The window this closes: a locator naming a server that is already gone.
+    expect(locators.published.size).toBe(0);
+    expect(child.killed).toBe(true);
+  });
+
   it('fails the start when the locator cannot be published', async () => {
     const { store, manager, children, locators, entry } = harness();
     store.upsert({ name: 'a', ...BASE });
