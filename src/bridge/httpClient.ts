@@ -5,7 +5,9 @@
 // only ever calls `request`. The static check in
 // scripts/check-egress-static.mjs pins that (no server construction anywhere
 // under src/bridge/), and the load-bearing evidence is the runtime test that
-// observes the packaged bridge's own process holding zero listening sockets.
+// runs the bridge as its own process — bundled as it ships, though under the
+// test runner's Node rather than the packaged app binary — and reads that
+// process's socket table.
 
 import { request } from 'node:http';
 import { assertLoopbackTarget } from './loopback.js';

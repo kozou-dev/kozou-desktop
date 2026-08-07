@@ -106,8 +106,14 @@ export class Relay {
     }
   }
 
-  /** stdin closed: tell the server the session is over. Best effort — the
-   *  client is already gone, and the app reclaims sessions on its own. */
+  /** stdin closed: tell the server the session is over.
+   *
+   *  This is the only thing that ends a session. The server holds each
+   *  initialized transport in a map and drops it when that transport closes;
+   *  there is no idle expiry in it (read in @kozou/mcp 1.17.0). So a bridge
+   *  killed without a clean EOF — SIGKILL, an EPIPE on stdout — leaves its
+   *  session behind until the app stops that profile's server. Not addressed
+   *  here; recorded so it is not mistaken for handled. */
   async close(): Promise<void> {
     if (this.sessionId === undefined) return;
     try {
@@ -177,11 +183,18 @@ function requestIdOf(message: string): string | number | null {
 /** The JSON-RPC payloads in a 2xx reply.
  *
  *  The server this bridge targets answers POSTs with a single JSON document
- *  (it constructs its transport with enableJsonResponse — measured in
- *  @kozou/mcp 1.17.0). The event-stream branch exists because the same
- *  transport can stream, and a relay that silently dropped those frames would
- *  hang the client rather than fail; it is exercised by a stub-server test,
- *  not by the real server. */
+ *  (it constructs its transport with enableJsonResponse — read in @kozou/mcp
+ *  1.17.0), and that is the only shape the integration test exercises.
+ *
+ *  The event-stream branch is a fallback for a reply that arrives with that
+ *  content type, and its limits should be read before relying on it: the body
+ *  is already complete when this runs (the client buffers to end), so it
+ *  forwards nothing incrementally and would not serve a stream the server
+ *  holds open, and it treats each `data:` line as a whole message rather than
+ *  joining the lines of one multi-line event. It is exercised only by a
+ *  stub that ends its response immediately. Making it a real SSE reader, or
+ *  refusing the content type outright, is an open decision — not something
+ *  this branch already does. */
 function framesOf(reply: RelayReply): string[] {
   const contentType = reply.headers['content-type'] ?? '';
   if (!contentType.includes('text/event-stream')) {

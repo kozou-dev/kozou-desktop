@@ -1,15 +1,27 @@
 // BR-2, filesystem leg: the only module in the bridge that touches a disk.
 //
-// What it may open is not a policy but an arithmetic: the path is
-// <userData>/mcp-locators/<id>.json, where <id> has already been checked
-// against /^[0-9a-f]{32}$/. No argument makes this reach the profile store —
-// no separator survives the id check, and the directory and the extension are
-// constants. That is what "the bridge never holds database credentials" rests
-// on: not a promise to avoid the file with the encrypted passwords in it, but
-// the absence of any expressible path to it.
+// What it may open is arithmetic rather than policy: the path is
+// <base>/mcp-locators/<id>.json, where <id> has already been checked against
+// /^[0-9a-f]{32}$/. No ARGUMENT reaches the profile store — no separator
+// survives the id check, and the directory and the extension are constants.
 //
-// (The check in scripts/check-treeshake.mjs forbids naming that file even in
-// a comment, for the same reason the API-server tripwire does: a bare
+// Two ways that is narrower than "the bridge cannot read the profile store",
+// both worth stating rather than discovering:
+//
+//   - <base> comes from the environment when KOZOU_DESKTOP_USER_DATA is set,
+//     and unlike main (which honours it in development only) this process has
+//     no way to know it is packaged. Whoever writes the AI client's config
+//     chooses it — the same party that chooses to spawn this at all;
+//   - readFileSync follows symlinks, so a link left at the locator's own name
+//     would be read whole before parseLocator rejected its shape.
+//
+// Both require write access to the user's own files, which is also what
+// reading the profile store directly requires — so this is about the accuracy
+// of the claim, not about a new capability. The honest statement is: no
+// EXPRESSION in this module names anything but the locator.
+//
+// (The check in scripts/check-treeshake.mjs forbids naming the profile store
+// even in a comment, for the same reason the API-server tripwire does: a bare
 // identifier is the one pattern with no bypass.)
 //
 // The scope of that claim, stated plainly: it is about the code in this

@@ -365,5 +365,13 @@ export class McpServerManager {
     });
     child.kill();
     await exited;
+    // The wait above resolves on a timeout as well as on an exit, so reaching
+    // here does not prove the child is gone. Withdraw the locator anyway: the
+    // app has decided it is no longer serving this profile, and a locator
+    // outliving that decision is worse than a bridge that fails to connect —
+    // on the delete path the entry is dropped straight after this call, so a
+    // later exit finds no entry and would never withdraw it at all. Normally
+    // the exit handler has already done this; releaseLocator is idempotent.
+    this.releaseLocator(entry);
   }
 }

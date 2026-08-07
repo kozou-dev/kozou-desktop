@@ -13,7 +13,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { McpLocatorWriter } from '../src/main/mcpLocatorFile.js';
 import { McpServerManager, type McpWorkerFork, type McpWorkerHandle } from '../src/main/mcpServerManager.js';
 import { ProfileStore, type Encryptor } from '../src/main/profileStore.js';
@@ -29,6 +29,10 @@ class FakeChild implements McpWorkerHandle {
   readonly em = new EventEmitter();
   readonly messages: unknown[] = [];
   killed = false;
+  /** Set to model a child that ignores kill() — the manager's stop wait is a
+   *  timeout, so this is the path where it gives up rather than observes an
+   *  exit. */
+  ignoresKill = false;
   constructor(
     readonly modulePath: string,
     readonly options: { env: Record<string, string>; serviceName: string; stdio: 'pipe' },
@@ -38,7 +42,7 @@ class FakeChild implements McpWorkerHandle {
   }
   kill(): boolean {
     this.killed = true;
-    queueMicrotask(() => this.em.emit('exit', 0));
+    if (!this.ignoresKill) queueMicrotask(() => this.em.emit('exit', 0));
     return true;
   }
   once(event: 'message' | 'exit', listener: (arg: never) => void): unknown {
@@ -258,6 +262,31 @@ describe('McpServerManager', () => {
     expect(children[0]!.killed).toBe(true);
     expect(entry('a')?.status).toBe('stopped');
     expect(locators.published.size).toBe(0);
+  });
+
+  it('withdraws the locator even when the worker ignores the kill', async () => {
+    // The stop wait is a timeout, not proof of death, and on the delete path
+    // the entry is dropped right after it — so a later exit would find no
+    // entry and the locator would outlive the app's decision to stop serving.
+    vi.useFakeTimers();
+    try {
+      const { store, manager, children, locators } = harness();
+      store.upsert({ name: 'a', ...BASE });
+      const started = manager.start('a');
+      const child = children[0]!;
+      child.replyOk(3335);
+      await started;
+      expect(locators.published.size).toBe(1);
+
+      child.ignoresKill = true;
+      const removing = manager.onProfileRemoved('a');
+      await vi.advanceTimersByTimeAsync(5_000);
+      await removing;
+      expect(child.killed).toBe(true);
+      expect(locators.published.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('gives a recreated profile a new locator id, so a stale entry cannot resolve', async () => {

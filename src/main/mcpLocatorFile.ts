@@ -39,8 +39,16 @@ export class FileMcpLocatorWriter implements McpLocatorWriter {
     const generation = generateLocatorGeneration();
     const target = this.pathFor(entry.id);
     const tmp = `${target}.tmp`;
+    const text = serializeLocator({ v: 1, ...entry, generation });
+    // Publish nothing the reader would refuse. The two ends validate to
+    // different rules on purpose — the store accepts any "/mcp-…" a user may
+    // have hand-edited into it, the locator accepts only a path that can be
+    // a URL path — and without this the app would report a server as running
+    // while every bridge invocation failed on the file it wrote. Parsing what
+    // was just serialized is the check that cannot drift from the reader's.
+    parseLocator(text, entry.id);
     mkdirSync(this.dir, { recursive: true, mode: 0o700 });
-    writeFileSync(tmp, serializeLocator({ v: 1, ...entry, generation }), { mode: 0o600 });
+    writeFileSync(tmp, text, { mode: 0o600 });
     // writeFileSync's mode applies to a file it CREATES; an existing temp file
     // (an interrupted earlier write) keeps its own mode, so pin it explicitly
     // before the rename publishes it.

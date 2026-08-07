@@ -59,6 +59,16 @@ describe('FileMcpLocatorWriter', () => {
     expect(readdirSync(dir)).toEqual([]);
   });
 
+  it('refuses to publish a record the bridge would refuse', () => {
+    // The store accepts any string starting "/mcp-", the locator only a path
+    // that can be a URL path. Without this check the app would report a
+    // server as running while every bridge invocation failed on the file.
+    const { dir, writer } = writerIn();
+    expect(() => writer.write({ ...ENTRY, path: '/mcp-a/b' })).toThrow(/capability path/);
+    expect(() => writer.write({ ...ENTRY, path: '/mcp-a?x=1' })).toThrow(/capability path/);
+    expect(() => readdirSync(dir)).toThrow(); // nothing was created at all
+  });
+
   it('tolerates removing what is not there', () => {
     const { writer } = writerIn();
     expect(() => writer.remove(OTHER, 'gen')).not.toThrow();
