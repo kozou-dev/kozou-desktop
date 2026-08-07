@@ -49,10 +49,19 @@ const EXTENSIONS = new Set(['.ts', '.svelte', '.html', '.css', '.js', '.mjs', '.
 // This is the auxiliary check, not the load-bearing one. A specifier scan
 // cannot tell a client from a server — both use the same module — so the
 // evidence that the bridge holds no listening socket is the runtime
-// observation in test/bridgeListen.test.ts, which reads the real process's
+// observation in test/bridgeProcess.test.ts, which reads the real process's
 // sockets. What is checkable statically is kept here: only one file may
 // import the module at all, and no bridge file may name a server-construction
 // or listener API.
+//
+// BR-4 gets the same two-layer treatment, for the same reason. "Does not
+// start the app" is a statement about what the process does, so the evidence
+// is again the runtime one — bridgeProcess.test.ts reads the bridge's child
+// PIDs, with a positive control that a process which DOES start a child is
+// caught by that detector. The tokens below are the cheap half: they are
+// API-shaped rather than prose-shaped on purpose, because the bridge's own
+// comments have to be able to say the word "spawn" while explaining that the
+// CLIENT is what spawns it.
 const BRIDGE_DIR = 'src/bridge';
 /** The single bridge file allowed to import a network module. */
 const BRIDGE_HTTP_CLIENT = 'src/bridge/httpClient.ts';
@@ -66,6 +75,19 @@ const BRIDGE_SERVER_TOKENS = [
   ['node:dgram', 'datagram module'],
   ['WebSocket', 'bidirectional socket'],
 ];
+/** BR-4: nothing in the bridge may start another process. */
+const BRIDGE_SPAWN_TOKENS = [
+  ['child_process', 'process-starting module'],
+  ['worker_threads', 'thread-starting module'],
+  ['spawn(', 'starting a process'],
+  ['spawnSync', 'starting a process'],
+  ['execFile', 'starting a process'],
+  ['execSync', 'starting a process'],
+  ['.fork(', 'starting a process'],
+  ['openExternal', 'handing a URL to another application'],
+];
+/** The bridge runs as plain Node, not inside the app. */
+const ELECTRON_IMPORT_RE = /from\s+['"]electron(\/|['"])|require\(\s*['"]electron(\/|['"])/;
 
 let failures = 0;
 const violation = (msg) => {
@@ -90,6 +112,12 @@ function scan(dir) {
     if (inBridge) {
       for (const [token, why] of BRIDGE_SERVER_TOKENS) {
         if (text.includes(token)) violation(`${full}: "${token}" (${why}) — the bridge never listens`);
+      }
+      for (const [token, why] of BRIDGE_SPAWN_TOKENS) {
+        if (text.includes(token)) violation(`${full}: "${token}" (${why}) — the bridge never starts the app (BR-4)`);
+      }
+      if (ELECTRON_IMPORT_RE.test(text)) {
+        violation(`${full}: imports electron — the bridge runs as plain Node, outside the app`);
       }
       if (relative !== BRIDGE_HTTP_CLIENT && NETWORK_MODULE_RE.test(text)) {
         violation(`${full}: only ${BRIDGE_HTTP_CLIENT} may import a network module in the bridge`);

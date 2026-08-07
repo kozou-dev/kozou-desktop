@@ -10,7 +10,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createRelayClient } from '../src/bridge/httpClient.js';
-import { Relay, pumpLines, type RelayReply, type RelayTransport } from '../src/bridge/relay.js';
+import { Relay, pumpLines, serveUnavailable, type RelayReply, type RelayTransport } from '../src/bridge/relay.js';
 
 const MCP_PATH = '/mcp-0123456789abcdef0123456789abcdef';
 
@@ -174,12 +174,43 @@ describe('relay against a session-bearing server', () => {
     expect(out[1]).not.toContain('\n');
   });
 
-  it('unwraps an event-stream reply into its messages', async () => {
+  // The version of this test that shipped with PR1 asserted only
+  // `toMatchObject({ id: 2 })` against a relay that unwrapped `data:` lines.
+  // That assertion is satisfied by BOTH behaviours — the unwrapped result and
+  // the refusal below both carry id 2 — so it stayed green when the branch it
+  // was named after was deleted. What separates them is which of `result` and
+  // `error` is present, so that is what this asserts.
+  it('refuses an event-stream reply rather than half-reading it', async () => {
     const stub = await startStub({ sse: true });
-    const { relay, out } = collectingRelay(createRelayClient(stub.url));
+    const { relay, out, err } = collectingRelay(createRelayClient(stub.url));
     await relay.handleLine(INITIALIZE);
     await relay.handleLine(TOOLS_LIST);
-    expect(JSON.parse(out[1]!)).toMatchObject({ id: 2 });
+    const reply = JSON.parse(out[1]!) as { id: number; result?: unknown; error?: { message: string } };
+    expect(reply.id).toBe(2);
+    expect(reply.result).toBeUndefined();
+    expect(reply.error?.message).toMatch(/event stream/);
+    expect(err.join('\n')).toMatch(/event stream/);
+  });
+
+  it('answers every id in a failed batch, not just the first', async () => {
+    const stub = await startStub({ fail: { status: 500, body: 'boom' } });
+    const { relay, out } = collectingRelay(createRelayClient(stub.url));
+    const batch = JSON.stringify([
+      { jsonrpc: '2.0', id: 7, method: 'tools/list', params: {} },
+      { jsonrpc: '2.0', method: 'notifications/progress' }, // no id: owed nothing
+      { jsonrpc: '2.0', id: 'nine', method: 'tools/list', params: {} },
+    ]);
+    await relay.handleLine(batch);
+    const replies = JSON.parse(out[0]!) as Array<{ id: string | number; error: { code: number } }>;
+    expect(replies.map((r) => r.id)).toEqual([7, 'nine']);
+    expect(replies.every((r) => r.error.code === -32000)).toBe(true);
+  });
+
+  it('answers a batch of notifications with nothing at all', async () => {
+    const stub = await startStub({ fail: { status: 500, body: 'boom' } });
+    const { relay, out } = collectingRelay(createRelayClient(stub.url));
+    await relay.handleLine(JSON.stringify([{ jsonrpc: '2.0', method: 'notifications/initialized' }]));
+    expect(out).toEqual([]);
   });
 
   it('forwards nothing of its own: the request body reaches the server unchanged', async () => {
@@ -278,5 +309,93 @@ describe('what the relay keeps', () => {
     expect(relay.session).toBeUndefined();
     // The headers are the complete state the relay adds to a request.
     expect(Object.keys(posted[1]!).sort()).toEqual(['accept', 'content-type', 'mcp-session-id']);
+  });
+});
+
+// The deadline and the cancellation, against a server that accepts a request
+// and never answers it. The bridge itself runs with a ten-minute inactivity
+// budget (DEFAULT_DEADLINES); these pass short ones, because a deadline that
+// cannot be watched firing is not something a test has checked.
+describe('a server that never answers', () => {
+  /** Accepts requests and holds them open forever. */
+  async function silentServer(): Promise<{ url: string; close: () => Promise<void> }> {
+    const held: ServerResponse[] = [];
+    const server = createServer((_req, res) => void held.push(res));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    running.push(server);
+    const port = (server.address() as { port: number }).port;
+    return {
+      url: `http://127.0.0.1:${port}${MCP_PATH}`,
+      close: async () => {
+        for (const res of held) res.destroy();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      },
+    };
+  }
+
+  it('gives up on the deadline instead of waiting forever', async () => {
+    const stub = await silentServer();
+    const client = createRelayClient(stub.url, { idleMs: 250, teardownMs: 250 });
+    const { relay, out, err } = collectingRelay(client);
+    await relay.handleLine(INITIALIZE);
+    expect(JSON.parse(out[0]!)).toMatchObject({ id: 1, error: { code: -32000 } });
+    expect(err.join('\n')).toMatch(/no response within 250ms/);
+    await stub.close();
+  });
+
+  it('abandons what is in flight when the client disconnects', async () => {
+    const stub = await silentServer();
+    // A deadline long enough that it cannot be what ends this: if the
+    // assertion passes, the cancellation is what did.
+    const client = createRelayClient(stub.url, { idleMs: 60_000, teardownMs: 250 });
+    const { relay, out, err } = collectingRelay(client);
+    const inFlight = relay.handleLine(INITIALIZE);
+    await new Promise((r) => setTimeout(r, 50));
+    client.disconnected();
+    await inFlight;
+    expect(JSON.parse(out[0]!)).toMatchObject({ id: 1, error: { code: -32000 } });
+    expect(err.join('\n')).toMatch(/closed its end of the bridge/);
+    await stub.close();
+  });
+});
+
+// BD4 at the message level. The process-level statement — that this is what
+// runs when no locator is published, and that nothing gets spawned while it
+// does — is in bridgeProcess.test.ts.
+describe('serving a client when no server can be reached', () => {
+  async function serve(lines: string[]): Promise<{ out: string[]; err: string[] }> {
+    const out: string[] = [];
+    const err: string[] = [];
+    async function* input(): AsyncGenerator<string> {
+      for (const line of lines) yield `${line}\n`;
+    }
+    await serveUnavailable(input(), 'no local MCP server is published for this entry', {
+      send: (m) => out.push(m),
+      log: (m) => err.push(m),
+    });
+    return { out, err };
+  }
+
+  it('answers each request with the reason, and says it once on stderr', async () => {
+    const { out, err } = await serve([INITIALIZE, TOOLS_LIST]);
+    expect(out).toHaveLength(2);
+    expect(JSON.parse(out[0]!)).toMatchObject({ id: 1, error: { code: -32000 } });
+    expect(JSON.parse(out[1]!)).toMatchObject({ id: 2, error: { code: -32000 } });
+    expect((JSON.parse(out[0]!) as { error: { message: string } }).error.message).toMatch(
+      /no local MCP server is published/,
+    );
+    expect(err).toHaveLength(1);
+  });
+
+  it('keeps answering rather than stopping after the first request', async () => {
+    // The client owns this process's lifetime: what it does after a failed
+    // initialize is its decision, not the bridge's.
+    const { out } = await serve([INITIALIZE, TOOLS_LIST, TOOLS_LIST]);
+    expect(out).toHaveLength(3);
+  });
+
+  it('answers nothing to a notification, and returns when the client closes', async () => {
+    const { out } = await serve([INITIALIZED]);
+    expect(out).toEqual([]);
   });
 });
