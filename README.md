@@ -110,8 +110,10 @@ local stdio-to-HTTP bridge process.
 
 This build **contains** such a bridge (`EGRESS.md` item 16 describes what it may
 and may not do) but does not yet **offer** it: no panel hands you an entry for
-it, and no run against Claude Desktop has happened. Nothing here says Kozou
-works in Claude Desktop.
+it. A hand-written entry has been tried once — Claude Desktop 1.26832.0 spawned
+the bridge and completed the MCP handshake on 2026-08-07 — but a tool call from
+Claude Desktop's own chat has not been observed, and nothing is offered to you
+here to reproduce it.
 
 One server per profile, so several databases can be served at once — each under
 its own name, port and path. What is in one place is the managing of them: you

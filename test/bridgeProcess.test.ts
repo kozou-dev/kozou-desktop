@@ -117,6 +117,25 @@ function lineReader(child: ChildProcessWithoutNullStreams): { next(): Promise<st
   };
 }
 
+/** The child's exit code, killing it if it overstays.
+ *
+ *  Closing stdin is a request; this is the guarantee. Measured the hard way:
+ *  running this file against a deliberately listening mutant left three
+ *  orphan processes holding ports, because nothing here made a bridge that
+ *  would not exit go away. */
+function exitCodeOf(child: ChildProcessWithoutNullStreams, ms = 15_000): Promise<number | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      resolve(null);
+    }, ms);
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      resolve(code);
+    });
+  });
+}
+
 describe('the bridge as a process', () => {
   let bundle: string;
   let userData: string;
@@ -215,7 +234,7 @@ describe('the bridge as a process', () => {
       child.stdin.end();
     }
 
-    const code = await new Promise<number | null>((resolve) => child.once('exit', resolve));
+    const code = await exitCodeOf(child);
     expect(code).toBe(0);
     expect(stderr.join('')).toBe('');
     // EOF ends the session at the server, not just locally.
@@ -232,7 +251,7 @@ describe('the bridge as a process', () => {
     let stderr = '';
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => (stderr += chunk));
-    const code = await new Promise<number | null>((resolve) => child.once('exit', resolve));
+    const code = await exitCodeOf(child);
     expect(code).toBe(1);
     expect(stderr).toMatch(/no local MCP server is published/);
     expect(stderr).toMatch(/Start Kozou/);
@@ -246,7 +265,7 @@ describe('the bridge as a process', () => {
     let stderr = '';
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => (stderr += chunk));
-    const code = await new Promise<number | null>((resolve) => child.once('exit', resolve));
+    const code = await exitCodeOf(child);
     expect(code).toBe(1);
     expect(stderr).toMatch(/32 lowercase hex/);
   }, TIMEOUT);
