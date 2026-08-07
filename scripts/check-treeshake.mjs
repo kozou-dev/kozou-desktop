@@ -40,6 +40,14 @@
 //     driver and no @kozou/api), absent from every process-side bundle, and
 //     present in the built renderer. The third leg is what keeps the first two
 //     from passing vacuously on a module nothing ships.
+//  6. STDIO BRIDGE (BR-2). The bridge must hold no database connection, no
+//     schema cache and no credentials. That is checked as reachability in the
+//     strongest form available: its whole import graph must be src/ files and
+//     Node builtins — zero dependencies, so neither `pg` nor @kozou/* nor the
+//     MCP SDK is in it. Two source rules back the filesystem side, because a
+//     dependency check cannot see an fs read: exactly one bridge module may
+//     import a filesystem module, and no bridge file may name the profile
+//     store (where the encrypted passwords live).
 
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -390,6 +398,83 @@ if (existsSync(rendererDir)) {
   failed = true;
 } else {
   console.warn('note: out/renderer not found — run `pnpm build` first for the emit reachability check');
+}
+
+// -- 8. the stdio bridge holds nothing (BR-2) ---------------------------------
+// The bridge is spawned by another application and talks to a server this app
+// already runs. It must be able to reach a port and a file, and nothing else.
+//
+//   (a) DEPENDENCY REACHABILITY: its import graph is src/ only. Node builtins
+//       are external for platform=node and so are absent from the metafile
+//       inputs; anything else — a driver, @kozou/*, the MCP SDK — would show
+//       up as a foreign input. This is stricter than a marker scan and needs
+//       no marker to stay in step with upstream renames.
+//   (b) FILESYSTEM REACH: only one module may import a filesystem module, so
+//       "what can this process open" is answerable by reading one small file.
+//   (c) THE PROFILE STORE BY NAME: no bridge file may name profiles.json or
+//       the store directory. The locator exists precisely so the bridge never
+//       parses the file that holds the encrypted passwords.
+const BRIDGE_ENTRY = 'src/bridge/stdioBridge.ts';
+const BRIDGE_FS_MODULE = 'src/bridge/locator.ts';
+const bridge = bundle(BRIDGE_ENTRY, 'stdioBridge', { externals: [] });
+const bridgeForeignInputs = bridge.inputs.filter((input) => !input.startsWith('src/'));
+if (bridgeForeignInputs.length > 0) {
+  console.error(
+    `BRIDGE VIOLATION: ${BRIDGE_ENTRY} reaches outside src/: ${bridgeForeignInputs.join(', ')} — ` +
+      'the bridge relays bytes; it holds no database, no cache and no credentials',
+  );
+  failed = true;
+} else {
+  console.log(`stdio bridge: import graph is ${bridge.inputs.length} src file(s), no dependency`);
+}
+
+const FS_MODULE_RE = /(?:from\s*|require\s*\(\s*|import\s*\(\s*)['"](?:node:)?fs(?:\/promises)?['"]/;
+const STORE_NAMES = ['profiles.json', "'store'", '"store"'];
+// One read, spelled one way. Naming the store is the obvious way to reach it
+// and the scan above catches that; a constructed name is the non-obvious way,
+// and what it still needs is a second call. Pinning the call site — count and
+// shape — is what makes "the bridge opens one file" checkable rather than
+// merely stated. (It is not a sandbox: a single call inside a loop would
+// satisfy both. Said plainly here rather than left to be discovered.)
+const BRIDGE_READ_CALL = "readFileSync(path, 'utf8')";
+const bridgeSources = readSources(join(ROOT, 'src/bridge'));
+const bridgeViolations = [];
+let bridgeReadCalls = 0;
+for (const { file, text } of bridgeSources) {
+  const relative = file.replace(/^\//, '');
+  if (FS_MODULE_RE.test(text) && relative !== BRIDGE_FS_MODULE) {
+    bridgeViolations.push(`${file}: imports a filesystem module (only ${BRIDGE_FS_MODULE} may)`);
+  }
+  for (const name of STORE_NAMES) {
+    if (text.includes(name)) bridgeViolations.push(`${file}: names the profile store (${name})`);
+  }
+  // Filesystem calls only: the injected reader the locator module takes as a
+  // parameter is not one (what it may be handed is pinned by the unit test
+  // asserting the exact set of paths asked for).
+  const FS_CALL_RE = /\breadFileSync\s*\(|\bopenSync\s*\(|\breaddirSync\s*\(|\bcreateReadStream\s*\(|\b(?:fs|promises)\.readFile\s*\(/g;
+  for (const call of text.matchAll(FS_CALL_RE)) {
+    bridgeReadCalls++;
+    if (!text.slice(call.index).startsWith(BRIDGE_READ_CALL)) {
+      bridgeViolations.push(`${file}: a filesystem read that is not ${BRIDGE_READ_CALL}`);
+    }
+  }
+}
+if (bridgeReadCalls !== 1) {
+  bridgeViolations.push(
+    `the bridge makes ${bridgeReadCalls} filesystem read call(s); it may make exactly one, of the locator`,
+  );
+}
+if (!bridgeSources.some(({ file }) => file.replace(/^\//, '') === BRIDGE_FS_MODULE)) {
+  bridgeViolations.push(`${BRIDGE_FS_MODULE} is missing — the single-fs-module rule now names nothing`);
+}
+if (bridgeViolations.length > 0) {
+  console.error(`BRIDGE VIOLATION:\n  ${bridgeViolations.join('\n  ')}`);
+  failed = true;
+} else {
+  console.log(
+    `stdio bridge (${bridgeSources.length} files): one fs module, one read call, ` +
+      'no reference to the profile store',
+  );
 }
 
 /** Every source under `dir`, recursively, as repo-relative paths. */

@@ -32,6 +32,13 @@ export type LocalMcpAllocation = {
   /** Start this profile's server on app launch. Set true by an explicit
    *  start and false by an explicit stop — never toggled implicitly. */
   autoStart: boolean;
+  /** Opaque id naming this profile's bridge locator (see
+   *  shared/mcpLocator.ts). Optional so an allocation written by an earlier
+   *  build stays valid — it is minted on next use rather than renumbering a
+   *  port an AI-client config already points at. Deleting and recreating a
+   *  profile mints a new one, so a stale config fails instead of silently
+   *  reconnecting to a different database. */
+  bridgeId?: string;
 };
 
 /** Per-profile row-data access level. 'off' (the default) means the app

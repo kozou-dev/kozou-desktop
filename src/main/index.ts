@@ -10,6 +10,7 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { BrowserWindow, app, dialog, ipcMain, safeStorage, session, type MessageBoxOptions } from 'electron';
+import { LOCATOR_DIR_NAME } from '../shared/mcpLocator.js';
 import { IPC, type McpStatusEntry, type SaveSqlOutcome } from '../shared/types.js';
 import { DataWorkerManager } from './dataWorkerManager.js';
 import {
@@ -21,6 +22,7 @@ import {
 } from './dataInput.js';
 import { electronDataWorkerFork, electronMcpWorkerFork } from './electronFork.js';
 import { runInspectWorker } from './inspectRunner.js';
+import { FileMcpLocatorWriter } from './mcpLocatorFile.js';
 import { McpServerManager } from './mcpServerManager.js';
 import { ProfileStore, validateProfileInput, type Encryptor } from './profileStore.js';
 import { assertRowAccess, requestRowAccessChange, type RowAccessApproval } from './rowAccessGate.js';
@@ -161,10 +163,15 @@ void app.whenReady().then(() => {
   session.defaultSession.setSpellCheckerEnabled(false);
 
   store = new ProfileStore(join(app.getPath('userData'), 'store'), safeStorageEncryptor);
+  // Nothing is serving yet, so any locator on disk is a leftover from a crash
+  // or a kill -9. Sweep before the restore below publishes the real ones.
+  const locators = new FileMcpLocatorWriter(join(app.getPath('userData'), LOCATOR_DIR_NAME));
+  locators.clearAll();
   mcpManager = new McpServerManager(
     store,
     () => join(import.meta.dirname, 'mcpServerWorker.js'),
     electronMcpWorkerFork,
+    locators,
     () => broadcastMcpStatus(mcpManager.status()),
   );
   dataManager = new DataWorkerManager(

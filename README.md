@@ -106,7 +106,12 @@ reachable `https` address, so `127.0.0.1` is not something they can resolve to
 your Mac — adding TLS would not help, and exposing the hub publicly is the
 opposite of what it is for. Its own configuration file launches local commands
 (stdio) rather than connecting to a URL. Reaching the hub from there needs a
-local stdio-to-HTTP bridge process; this build neither provides nor tests one.
+local stdio-to-HTTP bridge process.
+
+This build **contains** such a bridge (`EGRESS.md` item 16 describes what it may
+and may not do) but does not yet **offer** it: no panel hands you an entry for
+it, and no run against Claude Desktop has happened. Nothing here says Kozou
+works in Claude Desktop.
 
 One server per profile, so several databases can be served at once — each under
 its own name, port and path. What is in one place is the managing of them: you

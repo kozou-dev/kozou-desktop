@@ -14,8 +14,9 @@ import type {
   RemoteMcpDeclaration,
   RowAccess,
 } from '../shared/types.js';
+import { BRIDGE_ID_RE } from '../shared/mcpLocator.js';
 import { joinDbUrl, splitDbUrl } from '../shared/url.js';
-import { generateMcpPath, nextFreePort } from './mcpAllocation.js';
+import { generateBridgeId, generateMcpPath, nextFreePort } from './mcpAllocation.js';
 
 export type Encryptor = {
   available(): boolean;
@@ -67,7 +68,17 @@ function sanitizeLocalMcp(x: unknown): LocalMcpAllocation | undefined {
   if (!Number.isInteger(a.port) || (a.port as number) < 1 || (a.port as number) > 65_535) return undefined;
   if (typeof a.path !== 'string' || !a.path.startsWith('/mcp-')) return undefined;
   if (typeof a.autoStart !== 'boolean') return undefined;
-  return { port: a.port as number, path: a.path, autoStart: a.autoStart };
+  // A missing or malformed bridge id degrades to "absent", never to
+  // "allocation invalid": an allocation written before locators existed must
+  // keep its port and path (AI-client configs point at them) and gain an id
+  // on next use.
+  const bridgeId = typeof a.bridgeId === 'string' && BRIDGE_ID_RE.test(a.bridgeId) ? a.bridgeId : undefined;
+  return {
+    port: a.port as number,
+    path: a.path,
+    autoStart: a.autoStart,
+    ...(bridgeId !== undefined ? { bridgeId } : {}),
+  };
 }
 
 /** Anything but the two known grants — a hand-edited file, a truncated
@@ -368,27 +379,42 @@ export class ProfileStore {
    *  see reassignLocalMcpPort for the explicit user path. A fresh capability
    *  path is generated per allocation and never reused across profiles, so a
    *  recycled port never answers on a stale path. */
-  ensureLocalMcpAllocation(name: string): LocalMcpAllocation {
+  ensureLocalMcpAllocation(name: string): LocalMcpAllocation & { bridgeId: string } {
     const data = this.read();
     const p = this.findProfile(data, name);
     const current = sanitizeLocalMcp(p.localMcp);
-    if (current !== undefined) return current;
-    p.localMcp = { port: nextFreePort(this.takenPorts(data)), path: generateMcpPath(), autoStart: false };
+    if (current?.bridgeId !== undefined) return { ...current, bridgeId: current.bridgeId };
+    // An allocation from a build that had no locators keeps its port and path
+    // and only gains an id — renumbering here would invalidate configs the
+    // user has already pasted, which is exactly what stickiness exists to
+    // prevent.
+    const next: LocalMcpAllocation & { bridgeId: string } =
+      current !== undefined
+        ? { ...current, bridgeId: generateBridgeId() }
+        : {
+            port: nextFreePort(this.takenPorts(data)),
+            path: generateMcpPath(),
+            autoStart: false,
+            bridgeId: generateBridgeId(),
+          };
+    p.localMcp = next;
     this.write(data);
-    return p.localMcp;
+    return next;
   }
 
   /** Explicitly move a profile to the next free port (user action after an
-   *  "address in use" start failure). Keeps the capability path so only the
-   *  port changes in any config the user re-copies. */
+   *  "address in use" start failure). Keeps the capability path and the
+   *  locator id so only the port changes in any config the user re-copies —
+   *  and so a bridge entry keeps resolving (it reads the port at run time). */
   reassignLocalMcpPort(name: string): LocalMcpAllocation {
     const data = this.read();
     const p = this.findProfile(data, name);
     const current = sanitizeLocalMcp(p.localMcp);
     const path = current?.path ?? generateMcpPath();
     const autoStart = current?.autoStart ?? false;
+    const bridgeId = current?.bridgeId ?? generateBridgeId();
     // The current port is part of takenPorts, so the result always differs.
-    p.localMcp = { port: nextFreePort(this.takenPorts(data)), path, autoStart };
+    p.localMcp = { port: nextFreePort(this.takenPorts(data)), path, autoStart, bridgeId };
     this.write(data);
     return p.localMcp;
   }
@@ -404,7 +430,12 @@ export class ProfileStore {
     const current = sanitizeLocalMcp(p.localMcp);
     if (current === undefined) {
       if (!autoStart) return undefined;
-      p.localMcp = { port: nextFreePort(this.takenPorts(data)), path: generateMcpPath(), autoStart };
+      p.localMcp = {
+        port: nextFreePort(this.takenPorts(data)),
+        path: generateMcpPath(),
+        autoStart,
+        bridgeId: generateBridgeId(),
+      };
     } else {
       p.localMcp = { ...current, autoStart };
     }

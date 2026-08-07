@@ -39,6 +39,10 @@ export default defineConfig({
           inspectWorker: resolve(import.meta.dirname, 'src/worker/inspectWorker.ts'),
           mcpServerWorker: resolve(import.meta.dirname, 'src/worker/mcpServerWorker.ts'),
           dataWorker: resolve(import.meta.dirname, 'src/worker/dataWorker.ts'),
+          // Not a worker: the stdio bridge is spawned by an AI client, not by
+          // this app. It ships as a sibling entry so the app binary can run
+          // it as Node (ELECTRON_RUN_AS_NODE) straight from app.asar.
+          stdioBridge: resolve(import.meta.dirname, 'src/bridge/stdioBridge.ts'),
         },
       },
     },

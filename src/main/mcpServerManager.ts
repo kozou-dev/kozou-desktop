@@ -23,6 +23,12 @@
 // The Electron dependency is injected as a fork function (electronFork.ts)
 // so the whole state machine is unit-testable with a fake child — the same
 // philosophy as the profile store's injected Encryptor.
+//
+// Bridge locators (mcpLocatorFile.ts) are published here rather than beside
+// the allocation, because what they assert is liveness: a locator exists
+// exactly while a server is confirmed listening. Every path out of 'running'
+// — user stop, profile edit, crash, mode switch, quit — goes through this
+// class, so this is the only place that can keep that true.
 
 import { findRemoteDuplicates } from '../shared/dbIdentity.js';
 import { sanitizeErrorMessage } from '../shared/url.js';
@@ -33,6 +39,7 @@ import type {
   McpWorkerRequest,
   McpWorkerStarted,
 } from '../shared/types.js';
+import type { McpLocatorWriter } from './mcpLocatorFile.js';
 import type { ProfileStore } from './profileStore.js';
 
 const ENV_KEY = 'KOZOU_DESKTOP_DB_URL';
@@ -68,6 +75,8 @@ type Entry = {
   error?: string;
   stderrTail: string[];
   stopReason?: StopReason;
+  /** The published locator, while this profile's server is running. */
+  locator?: { id: string; generation: string };
 };
 
 export class McpServerManager {
@@ -77,6 +86,7 @@ export class McpServerManager {
     private readonly store: ProfileStore,
     private readonly workerPath: () => string,
     private readonly fork: McpWorkerFork,
+    private readonly locators: McpLocatorWriter,
     /** Called on every state change so main can push status to the renderer. */
     private readonly onChange: () => void = () => {},
   ) {}
@@ -174,6 +184,7 @@ export class McpServerManager {
         const e = this.entries.get(name);
         if (!e || e.child !== child) return;
         e.child = undefined;
+        this.releaseLocator(e);
         if (e.stopReason !== undefined) {
           e.status = e.stopReason === 'profile-updated' ? 'stopped-profile-updated' : 'stopped';
           e.error = undefined;
@@ -207,6 +218,23 @@ export class McpServerManager {
       return { outcome: 'error', error: started.error, status: this.status() };
     }
 
+    // Publish the locator only now, and treat a failure to publish as a
+    // failure to start. The invariant "a locator exists exactly while its
+    // server is listening" has to hold in both directions: a running server
+    // with no locator would make every bridge entry for it report the app as
+    // not serving, which the user could only diagnose from the other
+    // application's log. The cost of this choice is that a filesystem error
+    // takes down a server that URL-based clients could still have used.
+    let generation: string;
+    try {
+      generation = this.locators.write({ id: alloc.bridgeId, port: alloc.port, path: alloc.path });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await this.kill(name, 'user');
+      this.onChange();
+      return { outcome: 'error', error: `could not publish the bridge locator: ${message}`, status: this.status() };
+    }
+    entry.locator = { id: alloc.bridgeId, generation };
     entry.status = 'running';
     entry.error = undefined;
     if (!opts?.fromRestore) this.store.setLocalMcpAutoStart(name, true);
@@ -234,6 +262,10 @@ export class McpServerManager {
     for (const entry of this.entries.values()) {
       entry.stopReason ??= 'shutdown';
       entry.child?.kill();
+      // Synchronously here as well as in the exit handler: on quit the
+      // handler may never run, and a locator outliving the app would point
+      // an AI client at a port nothing answers on.
+      this.releaseLocator(entry);
     }
   }
 
@@ -286,6 +318,21 @@ export class McpServerManager {
     }
     this.onChange();
     return this.status();
+  }
+
+  /** Withdraw this entry's locator, if it published one. Idempotent: both the
+   *  exit handler and the quit sweep call it. */
+  private releaseLocator(entry: Entry): void {
+    const locator = entry.locator;
+    if (locator === undefined) return;
+    entry.locator = undefined;
+    try {
+      this.locators.remove(locator.id, locator.generation);
+    } catch {
+      // A locator we cannot delete points at a port nothing answers on: the
+      // bridge fails explicitly there, and the next launch's sweep clears it.
+      // Nothing here is worth failing a stop over.
+    }
   }
 
   private setEntry(name: string, entry: Entry): void {
