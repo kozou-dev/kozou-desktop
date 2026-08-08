@@ -29,6 +29,19 @@
 // matter. The cost, stated rather than discovered later: a message sent while
 // an earlier one is still in flight waits for it — including a cancellation
 // notification, which therefore cannot overtake the request it cancels.
+//
+// Only JSON replies are relayed. The server this targets answers with a
+// single JSON document (it constructs its transport with enableJsonResponse,
+// read in @kozou/mcp 1.17.0), so an event-stream reply means the contract
+// this bridge was built against no longer holds — and it is reported as a
+// failure rather than half-parsed. The match is on the lowercase spelling
+// only, so a server answering `Text/Event-Stream` — legal, since only header
+// *names* are case-insensitively normalized — is refused one step later as a
+// body that is not JSON: the wrong sentence, though nothing is relayed either
+// way. An earlier version had a branch that split
+// a buffered body on `data:` lines; it forwarded nothing incrementally, could
+// not serve a stream the server held open, and was exercised only by a stub.
+// Keeping it would have advertised a compatibility that did not exist.
 
 export type RelayReply = {
   status: number;
@@ -52,6 +65,11 @@ export type RelayIo = {
  *  server's behalf. -32000..-32099 is the reserved implementation range. */
 const TRANSPORT_ERROR = -32000;
 
+/** The `name` a transport sets on the error it raises when it refuses to send
+ *  because the client has gone. Matched by name so this module keeps knowing
+ *  nothing about the transport behind the interface. */
+export const CLIENT_GONE = 'ClientGoneError';
+
 export class Relay {
   private sessionId: string | undefined;
 
@@ -74,6 +92,13 @@ export class Relay {
       reply = await this.transport.post(message, this.headers());
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
+      // Two opposite diagnoses share this path, and saying the wrong one sends
+      // whoever reads the log to the wrong side of the bridge.
+      if (err instanceof Error && err.name === CLIENT_GONE) {
+        this.io.log(`kozou-bridge: ${detail}`);
+        this.fail(message, detail);
+        return;
+      }
       this.io.log(`kozou-bridge: cannot reach the local MCP server: ${detail}`);
       this.fail(message, `cannot reach the Kozou local MCP server: ${detail}`);
       return;
@@ -94,15 +119,21 @@ export class Relay {
       return;
     }
 
-    for (const payload of framesOf(reply)) {
-      // Re-serialize compactly: the line protocol cannot carry the embedded
-      // newlines a pretty-printed body would have.
-      try {
-        this.io.send(JSON.stringify(JSON.parse(payload)));
-      } catch {
-        this.io.log('kozou-bridge: server sent a body that is not JSON — dropping it');
-        this.fail(message, 'Kozou local MCP server sent a response that is not JSON');
-      }
+    if ((reply.headers['content-type'] ?? '').includes('text/event-stream')) {
+      this.io.log('kozou-bridge: server answered with an event stream, which this bridge does not read');
+      this.fail(message, 'Kozou local MCP server answered with an event stream; this bridge relays JSON replies only');
+      return;
+    }
+
+    const payload = reply.body.trim();
+    if (payload === '') return;
+    // Re-serialize compactly: the line protocol cannot carry the embedded
+    // newlines a pretty-printed body would have.
+    try {
+      this.io.send(JSON.stringify(JSON.parse(payload)));
+    } catch {
+      this.io.log('kozou-bridge: server sent a body that is not JSON — dropping it');
+      this.fail(message, 'Kozou local MCP server sent a response that is not JSON');
     }
   }
 
@@ -137,10 +168,36 @@ export class Relay {
    *  message with no id is a notification: there is nothing to answer, so the
    *  stderr line above is the whole report. */
   private fail(request: string, message: string): void {
-    const id = requestIdOf(request);
-    if (id === null) return;
-    this.io.send(JSON.stringify({ jsonrpc: '2.0', id, error: { code: TRANSPORT_ERROR, message } }));
+    const reply = errorReplyFor(request, message);
+    if (reply !== null) this.io.send(reply);
   }
+}
+
+/** Answer every request with the same transport error, until the client goes
+ *  away.
+ *
+ *  This is what BD4 looks like from the client's side. The bridge cannot reach
+ *  a server — no locator is published, or the one on disk does not parse — and
+ *  the thing it must not do is start the app (BR-4). Exiting immediately was
+ *  the earlier behaviour and it is not enough: the client sees a process that
+ *  died without answering, and the reason is only in a log file it wrote
+ *  somewhere. A JSON-RPC error carries the reason into the conversation.
+ *
+ *  It keeps answering rather than exiting after the first one because the
+ *  client owns this process's lifetime (§3): what happens after `initialize`
+ *  fails is the client's decision, and a bridge that vanished mid-exchange
+ *  would be a second, less legible failure on top of the first. */
+export async function serveUnavailable(
+  input: AsyncIterable<string>,
+  reason: string,
+  io: RelayIo,
+): Promise<void> {
+  io.log(`kozou-bridge: ${reason}`);
+  await pumpLines(input, (line) => {
+    const reply = errorReplyFor(line, reason);
+    if (reply !== null) io.send(reply);
+    return Promise.resolve();
+  });
 }
 
 /** Feed newline-delimited input through a handler, one complete line at a
@@ -162,48 +219,46 @@ export async function pumpLines(
   if (pending.trim() !== '') await onLine(pending);
 }
 
-/** The `id` of an outgoing message, or null when there is none to answer to
- *  (a notification, a batch, or something that is not JSON at all).
+/** The serialized JSON-RPC error answering `request`, or null when there is
+ *  nothing this bridge can answer it into.
  *
- *  This is the one place the relay looks inside a message, and it looks at
- *  the JSON-RPC envelope only — never at `method` or `params`. Correlation is
- *  transport work: without it a failed request leaves the client waiting for
- *  a response that will never come. */
-function requestIdOf(message: string): string | number | null {
+ *  This is the one place the relay looks inside a message, and it looks at the
+ *  JSON-RPC envelope only — never at `method` or `params`. Correlation is
+ *  transport work: without it a failed request leaves the client waiting for a
+ *  response that will never come.
+ *
+ *  **A failed batch is not answered, and that is a stated gap rather than an
+ *  oversight.** An earlier version of this function answered every id in a
+ *  batch with an array of errors. Measured against the client stack this
+ *  bridge exists for: `@modelcontextprotocol/sdk` 1.29.0 deserializes a stdio
+ *  line with a schema that is a union of four *object* shapes and has no batch
+ *  variant, so that array made the client's transport throw. MCP 2025-06-18
+ *  removed batching outright. Answering would trade "the client waits" for
+ *  "the client's transport throws", and claiming batch support the reachable
+ *  clients cannot read is the same advertisement of a compatibility that does
+ *  not exist that cost the event-stream branch its place. A batch that fails
+ *  in transport is therefore reported on stderr only.
+ *
+ *  What this does not filter, stated because the sentence above is about what
+ *  is owed rather than what arrives: a member carrying `result` or `error` is
+ *  a *response*, which is owed nothing, and it is answered anyway. */
+export function errorReplyFor(request: string, message: string): string | null {
+  const id = answerableIdOf(request);
+  if (id === null) return null;
+  return JSON.stringify({ jsonrpc: '2.0', id, error: { code: TRANSPORT_ERROR, message } });
+}
+
+/** The `id` of a message a response can be addressed to, or null when there is
+ *  none: a notification carries no id, a batch cannot be answered at all (see
+ *  above), and a body that is not JSON has no envelope to read. */
+function answerableIdOf(message: string): string | number | null {
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(message);
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
-    const id = (parsed as { id?: unknown }).id;
-    return typeof id === 'string' || typeof id === 'number' ? id : null;
+    parsed = JSON.parse(message);
   } catch {
     return null;
   }
-}
-
-/** The JSON-RPC payloads in a 2xx reply.
- *
- *  The server this bridge targets answers POSTs with a single JSON document
- *  (it constructs its transport with enableJsonResponse — read in @kozou/mcp
- *  1.17.0), and that is the only shape the integration test exercises.
- *
- *  The event-stream branch is a fallback for a reply that arrives with that
- *  content type, and its limits should be read before relying on it: the body
- *  is already complete when this runs (the client buffers to end), so it
- *  forwards nothing incrementally and would not serve a stream the server
- *  holds open, and it treats each `data:` line as a whole message rather than
- *  joining the lines of one multi-line event. It is exercised only by a
- *  stub that ends its response immediately. Making it a real SSE reader, or
- *  refusing the content type outright, is an open decision — not something
- *  this branch already does. */
-function framesOf(reply: RelayReply): string[] {
-  const contentType = reply.headers['content-type'] ?? '';
-  if (!contentType.includes('text/event-stream')) {
-    const body = reply.body.trim();
-    return body === '' ? [] : [body];
-  }
-  return reply.body
-    .split('\n')
-    .filter((line) => line.startsWith('data:'))
-    .map((line) => line.slice('data:'.length).trim())
-    .filter((payload) => payload !== '');
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  const id = (parsed as { id?: unknown }).id;
+  return typeof id === 'string' || typeof id === 'number' ? id : null;
 }

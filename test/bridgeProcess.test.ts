@@ -17,7 +17,7 @@
 
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdtempSync, readFileSync, readlinkSync, readdirSync, writeFileSync } from 'node:fs';
-import { createServer, type Server } from 'node:http';
+import { createServer, type Server, type ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -69,6 +69,18 @@ function linuxListeners(pid: number): string[] {
   return found;
 }
 
+/** PIDs the given process has as direct children.
+ *
+ *  BR-4 is "does not start the app", and the only way to see that is to look
+ *  at what the process actually started. Like listeningSockets, this throws
+ *  rather than returning nothing when it cannot tell: a detector that answers
+ *  "none" to an unanswerable question turns every assertion below into a
+ *  tautology, which is why there is a positive control for it. */
+function childPids(pid: number): string[] {
+  const out = runOrEmpty('pgrep', ['-P', String(pid)]);
+  return out.split('\n').filter((line) => line.trim() !== '');
+}
+
 function runOrEmpty(command: string, args: string[]): string {
   try {
     return execFileSync(command, args, { encoding: 'utf8' });
@@ -77,7 +89,7 @@ function runOrEmpty(command: string, args: string[]): string {
     // tool missing, for instance) has to surface.
     const e = err as { status?: number; stdout?: string; code?: string };
     if (e.code === 'ENOENT') {
-      throw new Error(`${command} is not available — BR-3 cannot be observed on this machine`);
+      throw new Error(`${command} is not available — BR-3/BR-4 cannot be observed on this machine`);
     }
     if (e.status === 1 && (e.stdout ?? '') === '') return '';
     throw err;
@@ -242,7 +254,15 @@ describe('the bridge as a process', () => {
     expect(sessions.size).toBe(0);
   }, TIMEOUT);
 
-  it('refuses to start without a locator, and does not start the app', async () => {
+  // BD4 and BR-4, which are the same moment seen from two sides: what the
+  // client is told, and what the bridge does not do about it.
+  //
+  // The previous version of this asserted only the exit code and the stderr
+  // text, while its name also claimed "does not start the app" — a claim
+  // nothing in it checked. It also could not have caught the gap this
+  // replaced: a bridge that exits without answering satisfies both of those
+  // assertions, and that is exactly what the bridge used to do.
+  it('answers the client with the reason when no locator is published', async () => {
     const empty = mkdtempSync(join(tmpdir(), 'kozou-desktop-empty-'));
     const child = spawn(process.execPath, [bundle, '--id', ID], {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -251,13 +271,99 @@ describe('the bridge as a process', () => {
     let stderr = '';
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => (stderr += chunk));
-    const code = await exitCodeOf(child);
-    expect(code).toBe(1);
+    const reader = lineReader(child);
+
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })}\n`);
+    const reply = JSON.parse(await reader.next()) as { id: number; error?: { message: string } };
+    expect(reply.id).toBe(1);
+    expect(reply.error?.message).toMatch(/no local MCP server is published/);
+
+    // BR-4, observed rather than inferred: nothing was started to recover.
+    expect(childPids(child.pid!)).toEqual([]);
+
+    child.stdin.end();
+    expect(await exitCodeOf(child)).toBe(1);
     expect(stderr).toMatch(/no local MCP server is published/);
     expect(stderr).toMatch(/Start Kozou/);
   }, TIMEOUT);
 
-  it('refuses an id that is not a locator id', async () => {
+  it('positive control: a process that DOES start a child is seen by the detector', async () => {
+    const script =
+      "import {spawn} from 'node:child_process';" +
+      "const c=spawn(process.execPath,['-e','setTimeout(()=>{},60000)']);" +
+      "c.on('spawn',()=>console.log('ready'));";
+    const file = join(mkdtempSync(join(tmpdir(), 'kozou-desktop-spawner-')), 'spawner.mjs');
+    writeFileSync(file, script);
+    const parent = spawn(process.execPath, [file], { stdio: ['ignore', 'pipe', 'inherit'] });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        parent.stdout.once('data', () => resolve());
+        parent.once('error', reject);
+        setTimeout(() => reject(new Error('control spawner did not start')), 10_000);
+      });
+      expect(childPids(parent.pid!).length).toBeGreaterThan(0);
+    } finally {
+      for (const pid of childPids(parent.pid!)) process.kill(Number(pid), 'SIGKILL');
+      parent.kill('SIGKILL');
+      await new Promise<void>((resolve) => parent.once('exit', () => resolve()));
+    }
+  }, TIMEOUT);
+
+  it('starts nothing while relaying a healthy session either', async () => {
+    const child = spawn(process.execPath, [bundle, '--id', ID], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, KOZOU_DESKTOP_USER_DATA: userData },
+    });
+    const reader = lineReader(child);
+    try {
+      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })}\n`);
+      await reader.next();
+      expect(childPids(child.pid!)).toEqual([]);
+    } finally {
+      child.stdin.end();
+    }
+    await exitCodeOf(child);
+  }, TIMEOUT);
+
+  it('exits when the client closes, even with a request the server never answers', async () => {
+    // The measured failure this replaces: closing stdin left the process
+    // alive indefinitely, because the relay was inside a POST that would
+    // never return and nothing told it the client had gone.
+    const held: ServerResponse[] = [];
+    const silent = createServer((_req, res) => void held.push(res));
+    await new Promise<void>((resolve) => silent.listen(0, '127.0.0.1', resolve));
+    const silentUserData = publishLocator({
+      id: ID,
+      port: (silent.address() as { port: number }).port,
+      path: MCP_PATH,
+    });
+    const child = spawn(process.execPath, [bundle, '--id', ID], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, KOZOU_DESKTOP_USER_DATA: silentUserData },
+    });
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => (stderr += chunk));
+    try {
+      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })}\n`);
+      await new Promise((r) => setTimeout(r, 300));
+      child.stdin.end();
+      // Well inside the ten-minute deadline the bridge ships with, so passing
+      // here means the disconnect ended it, not the deadline.
+      expect(await exitCodeOf(child, 10_000)).not.toBeNull();
+      expect(stderr).toMatch(/closed its end of the bridge/);
+    } finally {
+      for (const res of held) res.destroy();
+      await new Promise<void>((resolve) => silent.close(() => resolve()));
+    }
+  }, TIMEOUT);
+
+  // A malformed id is a broken config entry rather than an absent app, but it
+  // reaches the client the same way and for the same reason: whatever stops
+  // the bridge from binding to a server is said in the exchange, not only in a
+  // log the user has to go find. Usage errors (a missing --id) still exit
+  // straight away — there is no client conversation to answer into yet.
+  it('refuses an id that is not a locator id, and tells the client so', async () => {
     const child = spawn(process.execPath, [bundle, '--id', '../store/profiles'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, KOZOU_DESKTOP_USER_DATA: userData },
@@ -265,8 +371,68 @@ describe('the bridge as a process', () => {
     let stderr = '';
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => (stderr += chunk));
-    const code = await exitCodeOf(child);
-    expect(code).toBe(1);
+    const reader = lineReader(child);
+
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })}\n`);
+    const reply = JSON.parse(await reader.next()) as { id: number; error?: { message: string } };
+    expect(reply.error?.message).toMatch(/32 lowercase hex/);
+    expect(childPids(child.pid!)).toEqual([]);
+
+    child.stdin.end();
+    expect(await exitCodeOf(child)).toBe(1);
     expect(stderr).toMatch(/32 lowercase hex/);
+  }, TIMEOUT);
+
+  it('reports a broken pipe once and leaves, without the client closing stdin', async () => {
+    // stdout belongs to the client and the client can go at any moment. Before
+    // the handler existed this ended as an unhandled EPIPE, i.e. a Node stack
+    // trace in the client's log — measured.
+    //
+    // Two things beyond that are pinned here, because the first version of the
+    // handler satisfied neither while this test stayed green. **stdin is left
+    // open on purpose**: nothing else can end this process, so an exit is the
+    // handler's doing. And the pipe is reported *once* — the requests written
+    // after it breaks are replies the bridge would try to write into it, and
+    // the earlier handler emitted one line per attempt while it kept running
+    // and kept querying the database behind them.
+    const child = spawn(process.execPath, [bundle, '--id', ID], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, KOZOU_DESKTOP_USER_DATA: userData },
+    });
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => (stderr += chunk));
+    child.stdout.on('error', () => {
+      // reading side of the parent; the child's write is what matters here
+    });
+    child.stdin.on('error', () => {
+      // the child may stop reading before these writes land, which is the point
+    });
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })}\n`);
+    await new Promise((r) => setTimeout(r, 300));
+    child.stdout.destroy();
+    for (let id = 2; id <= 6; id += 1) {
+      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/list', params: {} })}\n`);
+    }
+    expect(await exitCodeOf(child, 10_000)).toBe(1);
+    const reported = stderr
+      .split('\n')
+      .filter((line) => /closed the connection before this reply could be written/.test(line));
+    expect(reported).toHaveLength(1);
+    expect(stderr).not.toMatch(/Unhandled 'error' event/);
+    expect(stderr).not.toMatch(/at Relay\./);
+    expect(stderr).not.toMatch(/ERR_STREAM_PREMATURE_CLOSE/);
+  }, TIMEOUT);
+
+  it('exits straight away on a usage error, with nothing to answer into', async () => {
+    const child = spawn(process.execPath, [bundle, '--wrong'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, KOZOU_DESKTOP_USER_DATA: userData },
+    });
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => (stderr += chunk));
+    expect(await exitCodeOf(child)).toBe(1);
+    expect(stderr).toMatch(/usage:/);
   }, TIMEOUT);
 });
