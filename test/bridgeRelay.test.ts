@@ -9,7 +9,7 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createRelayClient } from '../src/bridge/httpClient.js';
+import { createRelayClient, DEFAULT_DEADLINES } from '../src/bridge/httpClient.js';
 import { Relay, pumpLines, serveUnavailable, type RelayReply, type RelayTransport } from '../src/bridge/relay.js';
 
 const MCP_PATH = '/mcp-0123456789abcdef0123456789abcdef';
@@ -192,24 +192,27 @@ describe('relay against a session-bearing server', () => {
     expect(err.join('\n')).toMatch(/event stream/);
   });
 
-  it('answers every id in a failed batch, not just the first', async () => {
+  it('leaves a failed batch unanswered on stdout, and says why on stderr', async () => {
+    // A stated gap, not an oversight: an array of errors is a line the stdio
+    // client this bridge exists for cannot parse (its schema is a union of
+    // object shapes; MCP 2025-06-18 removed batching), so answering would
+    // trade "the client waits" for "the client's transport throws". The
+    // report goes where a client that cannot read the reply can still see it.
     const stub = await startStub({ fail: { status: 500, body: 'boom' } });
-    const { relay, out } = collectingRelay(createRelayClient(stub.url));
+    const { relay, out, err } = collectingRelay(createRelayClient(stub.url));
     const batch = JSON.stringify([
       { jsonrpc: '2.0', id: 7, method: 'tools/list', params: {} },
-      { jsonrpc: '2.0', method: 'notifications/progress' }, // no id: owed nothing
       { jsonrpc: '2.0', id: 'nine', method: 'tools/list', params: {} },
     ]);
     await relay.handleLine(batch);
-    const replies = JSON.parse(out[0]!) as Array<{ id: string | number; error: { code: number } }>;
-    expect(replies.map((r) => r.id)).toEqual([7, 'nine']);
-    expect(replies.every((r) => r.error.code === -32000)).toBe(true);
+    expect(out).toEqual([]);
+    expect(err.join('\n')).toMatch(/server returned HTTP/);
   });
 
-  it('answers a batch of notifications with nothing at all', async () => {
+  it('answers a notification with nothing at all', async () => {
     const stub = await startStub({ fail: { status: 500, body: 'boom' } });
     const { relay, out } = collectingRelay(createRelayClient(stub.url));
-    await relay.handleLine(JSON.stringify([{ jsonrpc: '2.0', method: 'notifications/initialized' }]));
+    await relay.handleLine(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }));
     expect(out).toEqual([]);
   });
 
@@ -356,6 +359,48 @@ describe('a server that never answers', () => {
     expect(JSON.parse(out[0]!)).toMatchObject({ id: 1, error: { code: -32000 } });
     expect(err.join('\n')).toMatch(/closed its end of the bridge/);
     await stub.close();
+  });
+
+  it('sends nothing that was queued behind the request it abandoned', async () => {
+    // Cancelling the one in flight is half the job. The relay sends one
+    // message at a time, so a client that quits with several calls out leaves
+    // the rest queued — and each of those used to open its own socket and run
+    // its own introspection query for a conversation nobody was in, holding
+    // the process open for one teardown deadline apiece. Both deadlines here
+    // are long enough that neither can be what ends this.
+    let posts = 0;
+    const held: ServerResponse[] = [];
+    const server = createServer((_req, res) => {
+      posts += 1;
+      held.push(res);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    running.push(server);
+    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}${MCP_PATH}`;
+    const client = createRelayClient(url, { idleMs: 60_000, teardownMs: 60_000 });
+    const { relay, out, err } = collectingRelay(client);
+    const inFlight = relay.handleLine(INITIALIZE);
+    await new Promise((r) => setTimeout(r, 50));
+    client.disconnected();
+    await inFlight;
+    await relay.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }));
+    expect(posts).toBe(1);
+    // Still answered, so a client that closed only its writing end is not left
+    // waiting — it just is not answered from the database.
+    expect(JSON.parse(out[1]!)).toMatchObject({ id: 2, error: { code: -32000 } });
+    expect(err.join('\n')).toMatch(/before this request was sent/);
+    for (const res of held) res.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('ships deadlines that can actually fire', () => {
+    // Every test above injects its own short budget, which is exactly how the
+    // shipped ten-minute one could be set to zero with all of them green:
+    // node:http reads `timeout: 0` as no deadline at all, so the failure this
+    // whole section exists to prevent was one character away and unwatched.
+    expect(DEFAULT_DEADLINES.idleMs).toBeGreaterThan(0);
+    expect(DEFAULT_DEADLINES.teardownMs).toBeGreaterThan(0);
+    expect(DEFAULT_DEADLINES.teardownMs).toBeLessThan(DEFAULT_DEADLINES.idleMs);
   });
 });
 

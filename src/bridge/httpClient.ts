@@ -11,6 +11,7 @@
 
 import { request, type ClientRequest } from 'node:http';
 import { assertLoopbackTarget } from './loopback.js';
+import { CLIENT_GONE } from './relay.js';
 
 export type HttpReply = {
   status: number;
@@ -23,9 +24,24 @@ export type RelayClient = {
   /** MCP session teardown (DELETE on the same endpoint). */
   end(headers: Record<string, string>): Promise<HttpReply>;
   /** The client that spawned this bridge has closed its end. Abandon whatever
-   *  is in flight and bound whatever the shutdown still has to send. */
+   *  is in flight, refuse to start anything new, and bound whatever the
+   *  shutdown still has to send. */
   disconnected(): void;
 };
+
+/** Raised instead of opening a socket once the client has gone.
+ *
+ *  Its own type, because the relay has to tell this apart from a server it
+ *  could not reach: they are opposite diagnoses and only one of them is about
+ *  the database side. */
+export class ClientGoneError extends Error {
+  constructor() {
+    super('the AI client closed its end of the bridge before this request was sent');
+    // The relay recognizes this by name rather than by identity: it is written
+    // against a transport interface and does not import this module.
+    this.name = CLIENT_GONE;
+  }
+}
 
 /** How long a request may go without a single byte moving before the bridge
  *  gives up on it.
@@ -65,7 +81,14 @@ export type Deadlines = {
 
 /** What the bridge itself runs with. Tests pass shorter ones: a ten-minute
  *  deadline can be asserted to exist but not to fire, and a guard that cannot
- *  observe the thing it guards is not one. */
+ *  observe the thing it guards is not one.
+ *
+ *  That leaves these two values watched by nobody, which is not a small gap:
+ *  `timeout: 0` means *no deadline* to node:http, so the failure the section
+ *  above describes was one character away with every deadline test green
+ *  (measured). One assertion in bridgeRelay.test.ts now pins that they are
+ *  non-zero and correctly ordered — the shape of the values, since the
+ *  behaviour is what the injected ones are for. */
 export const DEFAULT_DEADLINES: Deadlines = { idleMs: IDLE_TIMEOUT_MS, teardownMs: TEARDOWN_TIMEOUT_MS };
 
 /** Bind a client to one target, refusing anything but loopback. The check
@@ -76,11 +99,23 @@ export function createRelayClient(target: string, deadlines: Deadlines = DEFAULT
   assertLoopbackTarget(target);
   const inFlight = new Set<ClientRequest>();
   let deadlineMs = deadlines.idleMs;
+  let gone = false;
   const options = (): SendOptions => ({ inFlight, deadlineMs });
   return {
-    post: (body, headers) => send('POST', target, headers, options(), body),
+    // Cancelling what is in flight is only half of it. The relay sends one
+    // message at a time, so a client that quits with several calls outstanding
+    // leaves the rest queued behind the cancelled one — and without this gate
+    // each of those still opened a socket and ran an introspection query for a
+    // conversation nobody was in. Measured: three requests written together
+    // and then stdin closed produced three POSTs, two of them issued after the
+    // client had provably gone, and the process outlived it by one teardown
+    // deadline per queued request.
+    post: (body, headers) => (gone ? Promise.reject(new ClientGoneError()) : send('POST', target, headers, options(), body)),
+    // The DELETE is exempt on purpose: it is the one message whose whole point
+    // is to be sent after the client has gone.
     end: (headers) => send('DELETE', target, headers, options()),
     disconnected: () => {
+      gone = true;
       deadlineMs = deadlines.teardownMs;
       for (const req of inFlight) req.destroy(new Error('the AI client closed its end of the bridge'));
     },

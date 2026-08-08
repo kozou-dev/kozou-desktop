@@ -38,19 +38,35 @@ async function main(): Promise<void> {
     log: (message) => void process.stderr.write(`${message}\n`),
   };
   // stdout belongs to another process and that process can vanish mid-write.
-  // Without this the first write after it does is an unhandled 'error' event,
-  // which ends the bridge with a Node stack trace in the client's log —
+  // Without a handler the first write after it does is an unhandled 'error'
+  // event, which ends the bridge with a Node stack trace in the client's log —
   // measured, and made likelier by the cancellation below, which answers an
-  // abandoned request precisely when the client is the thing that left. A
-  // broken pipe is the client leaving, not a fault here, so it is reported in
-  // one line and the process stops.
+  // abandoned request precisely when the client is the thing that left.
+  //
+  // A broken pipe carries the same news as stdin's EOF: the client has gone.
+  // So it is acted on the same way rather than merely noted — cancel what is
+  // in flight, stop reading, let the process end. Setting an exit code was not
+  // enough on its own: measured, that left the bridge running and issuing
+  // requests into a stdout with no reader, one stderr line per failed write.
+  // The pipe is reported once, however many writes fail into it afterwards.
+  let left = false;
+  let cancelInFlight = (): void => {};
+  const clientLeft = (reason: string): void => {
+    if (left) return;
+    left = true;
+    io.log(reason);
+    process.exitCode = 1;
+    cancelInFlight();
+    // The pump owns stdin, so destroying it is what ends the wait. The
+    // premature close it raises is ours, and is swallowed where it is awaited.
+    process.stdin.destroy();
+  };
   process.stdout.on('error', (err: NodeJS.ErrnoException) => {
-    io.log(
+    clientLeft(
       err.code === 'EPIPE'
         ? 'kozou-bridge: the AI client closed the connection before this reply could be written'
         : `kozou-bridge: cannot write to the AI client: ${err.message}`,
     );
-    process.exitCode = 1;
   });
   process.stdin.setEncoding('utf8');
 
@@ -64,11 +80,12 @@ async function main(): Promise<void> {
     // BD4. Nothing is started here to recover — not the app, not a server. The
     // failure is reported in the only two places the client can see it: its
     // log (stderr) and the exchange itself (a JSON-RPC error per request).
-    await serveUnavailable(process.stdin, err instanceof Error ? err.message : String(err), io);
+    await ownEndOnly(serveUnavailable(process.stdin, err instanceof Error ? err.message : String(err), io), () => left);
     process.exitCode = 1;
     return;
   }
 
+  cancelInFlight = () => client.disconnected();
   const relay = new Relay(client, io);
   // The client closing its end is the one signal that no answer is wanted any
   // more. Without this, a server that accepts a request and never replies
@@ -77,8 +94,19 @@ async function main(): Promise<void> {
   // The deadline in the client is the guarantee; this is what makes the
   // ordinary case immediate rather than deadline-long.
   process.stdin.on('end', () => client.disconnected());
-  await pumpLines(process.stdin, (line) => relay.handleLine(line));
+  await ownEndOnly(pumpLines(process.stdin, (line) => relay.handleLine(line)), () => left);
   await relay.close();
+}
+
+/** Await a read of stdin, swallowing only the failure this process caused by
+ *  destroying stdin itself. Anything else is a real read failure and is left
+ *  to the handler at the bottom of the file. */
+async function ownEndOnly(reading: Promise<void>, weEndedIt: () => boolean): Promise<void> {
+  try {
+    await reading;
+  } catch (err) {
+    if (!weEndedIt()) throw err;
+  }
 }
 
 main().catch((err: unknown) => {
