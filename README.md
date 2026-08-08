@@ -110,10 +110,11 @@ local stdio-to-HTTP bridge process.
 
 This build **contains** such a bridge (`EGRESS.md` item 16 describes what it may
 and may not do) but does not yet **offer** it: no panel hands you an entry for
-it. A hand-written entry has been tried once — Claude Desktop 1.26832.0 spawned
-the bridge and completed the MCP handshake on 2026-08-07 — but a tool call from
-Claude Desktop's own chat has not been observed, and nothing is offered to you
-here to reproduce it.
+it. A hand-written entry has been tried once and carried a whole exchange: on
+2026-08-07 Claude Desktop 1.26832.0 spawned the bridge, completed the MCP
+handshake, and later called tools over it from its own chat — two calls, both
+answered. What is missing is the config, not the path: that entry was written by
+hand, and nothing here produces one for you.
 
 One server per profile, so several databases can be served at once — each under
 its own name, port and path. What is in one place is the managing of them: you
