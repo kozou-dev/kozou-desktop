@@ -140,19 +140,17 @@ before any code here runs. What the bridge does report is the *server*: with no
 server published for that profile it says so and starts nothing (`EGRESS.md`
 item 16, property (d)). Rebuilding the app in place changes neither path.
 
-What has actually been run, by hand, twice:
+What has actually been run, by hand: on **2026-08-09**, Claude Desktop 1.26832.0 was
+given the entry **this app produced**, spawned the bridge from it, completed the MCP
+handshake, and then **answered from its own chat** over that entry — the client's log
+records two `tools/call` requests, each answered, and the chat's replies carried the
+database's compiled semantics. Stopping the app and calling again over the same entry
+produced the explicit failure it is supposed to: a JSON-RPC error naming a refused
+connection, with nothing started on its own.
 
-- **2026-08-07** — Claude Desktop 1.26832.0 spawned the bridge from an entry written
-  **by hand**, completed the MCP handshake, and later called tools over it **from its
-  own chat** (two calls, both answered). The relay has changed since that run.
-- **2026-08-09** — the same client, given the entry **this app produced**, spawned it
-  again and completed the handshake and `tools/list`; a tool call over that entry
-  returned the database's compiled semantics. That call came from the same
-  application's Claude Code surface, **not** from its chat.
-
-So the produced entry is known to reach the server, and the chat surface is known to
-call tools over a hand-written one — the two have not yet been demonstrated together.
-One machine, one client version, one run each; `EGRESS.md` keeps the full scope.
+An earlier run (2026-08-07) reached the same point with an entry written by hand;
+the relay has changed since then. One machine, one client version, one run;
+`EGRESS.md` keeps the full scope of what that does and does not establish.
 
 One server per profile, so several databases can be served at once — each under
 its own name, port and path. What is in one place is the managing of them: you

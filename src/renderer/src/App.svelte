@@ -802,9 +802,9 @@
           not serving this profile, the bridge starts and reports that.
         </p>
         <p class="form-hint">
-          An entry produced here has been started by Claude Desktop once, by hand, on
-          2026-08-09 - one machine, one client version, one run. What that does and does
-          not establish is recorded in EGRESS.md.
+          Tried by hand on 2026-08-09: Claude Desktop started an entry produced here and
+          answered from its own chat over it. One machine, one client version, one run -
+          what that does and does not establish is recorded in EGRESS.md.
         </p>
       {:else if bridgeMissing !== null}
         <p class="form-hint" data-testid="mcp-snippet-desktop-missing">
