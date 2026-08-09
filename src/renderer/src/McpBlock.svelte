@@ -44,7 +44,15 @@
   const mcpBadge = (st: McpStatusEntry | undefined): { text: string; cls: string } => {
     switch (st?.status) {
       case 'running':
-        return { text: `MCP on :${st.port}`, cls: 'on' };
+        // A server can outlive its allocation for a moment: repointing a
+        // profile discards the allocation, and a worker that ignores the kill
+        // keeps this status for up to three seconds afterwards. Naming a port
+        // this profile no longer holds would be false (it read "MCP on
+        // :undefined"), so say the true thing instead — something is still
+        // serving, and it is on its way out.
+        return st.port === undefined
+          ? { text: 'MCP stopping...', cls: '' }
+          : { text: `MCP on :${st.port}`, cls: 'on' };
       case 'starting':
         return { text: 'MCP starting...', cls: '' };
       case 'stopped-crashed':

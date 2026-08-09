@@ -218,6 +218,53 @@ describe('ProfileStore local MCP fields', () => {
     expect(store.list()[0]!.localMcp).toEqual(alloc);
   });
 
+  // The allocation is what an AI client's config points at, so it lives as long
+  // as the connection it was handed out for — the same rule as the row-access
+  // grant, and for a sharper reason: a preserved allocation makes a pasted
+  // entry answer for another database under the same name, with nothing on
+  // either side to notice.
+  it('drops the local-MCP allocation when an edit repoints the profile at another database', () => {
+    const { store } = freshStore();
+    store.upsert({ name: 'a', ...base });
+    const before = store.ensureLocalMcpAllocation('a');
+
+    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/other', schemas: ['public'] });
+    expect(store.list()[0]!.localMcp).toBeUndefined();
+
+    // Both halves of a stale config have to stop resolving. A pasted URL 404s
+    // because the capability path is new; a pasted bridge entry fails
+    // explicitly because no locator answers for its id. The port may well be
+    // handed out again — it is not what identifies the server.
+    const after = store.ensureLocalMcpAllocation('a');
+    expect(after.path).not.toBe(before.path);
+    expect(after.bridgeId).not.toBe(before.bridgeId);
+  });
+
+  it('drops the local-MCP allocation when the schema set changes', () => {
+    const { store } = freshStore();
+    store.upsert({ name: 'a', ...base });
+    store.ensureLocalMcpAllocation('a');
+    store.upsert({ name: 'a', url: base.url, schemas: ['public', 'sales'] });
+    expect(store.list()[0]!.localMcp).toBeUndefined();
+  });
+
+  it('keeps the local-MCP allocation across a password rotation but not a change of credential state', () => {
+    const { store } = freshStore();
+    store.upsert({ name: 'a', url: 'postgresql://u:old@h:5432/db', schemas: ['public'] });
+    const alloc = store.ensureLocalMcpAllocation('a');
+
+    // Same server, same database, same role: a client's config still points
+    // where it did, so invalidating it would cost the user a repaste for
+    // nothing.
+    store.upsert({ name: 'a', url: 'postgresql://u:new@h:5432/db', schemas: ['public'] });
+    expect(store.list()[0]!.localMcp).toEqual(alloc);
+
+    // Dropping the stored password changes which credentials the served
+    // database is reached with — the same fact the grant is anchored to.
+    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
+    expect(store.list()[0]!.localMcp).toBeUndefined();
+  });
+
   it('validates remoteMcp input at the IPC boundary', () => {
     const { store } = freshStore();
     expect(() => store.upsert({ name: 'a', ...base, remoteMcp: 'yes' })).toThrow(/remoteMcp must be an object/);

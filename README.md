@@ -169,19 +169,31 @@ Worth knowing before you paste:
 
 - **The app bounds the listener's lifetime.** Quitting closes the port. A
   profile you started comes back on the next launch until you press **stop** —
-  with one exception: a profile you started over the duplicate-declaration
+  with two exceptions. Repointing a profile at another database (or at other
+  schemas, or at a different credential state) drops that intent along with the
+  allocation it lives in, so a repointed profile does not auto-start against a
+  database you have not started it for. And a profile you started over the
+  duplicate-declaration
   warning is left at `MCP blocked (duplicate)` at launch instead, because
   restoring one would mean re-asking, and the app raises no dialogs while
   starting up. An edit that repoints a profile at a different URL or different
   schemas stops its server rather than serving the old database under the same
   name (the badge says so; restarting it is a deliberate click).
-- **The port is sticky** — assigned once from 3335 upward (3334 is skipped: it
-  is the kozou CLI's own default) and never silently renumbered, because the
-  configs you pasted name it. A bind conflict is reported as `MCP port busy`
-  with a **move port** control instead of being resolved behind your back, and
-  while that lasts the database's MCP row stops offering to open the config panel
-  (a panel you already had open keeps showing the snippet, and says the server is
-  not running).
+- **The port is sticky while the profile names the same database** — assigned
+  once from 3335 upward (3334 is skipped: it is the kozou CLI's own default) and
+  never silently renumbered, because the configs you pasted name it. A bind
+  conflict is reported as `MCP port busy` with a **move port** control instead of
+  being resolved behind your back, and while that lasts the database's MCP row
+  stops offering to open the config panel (a panel you already had open keeps
+  showing the snippet, and says the server is not running). The other thing that
+  replaces it is an edit that changes what the profile connects to — another
+  database, another schema set, or adding/removing the stored password — and
+  there the invalidation is the point: a config you pasted for one database
+  stops resolving rather than quietly serving the new one under the old name.
+  The bridge entry fails immediately, on a locator id nothing answers for; a
+  pasted URL stops resolving once the old server is actually down, which is
+  normally at once and takes up to three seconds if that worker ignores the
+  request to stop.
 - **The path is a capability, not authentication.** Any process on your machine
   that can read your AI client's config files can read schema *metadata*
   through it — never row data. Moving the port keeps the same path, so a config

@@ -268,14 +268,40 @@ export class ProfileStore {
     // every label edit would be poor behaviour. The remote declaration follows
     // the input when present ({ declared: false } clears) and is preserved when
     // the input omits it.
-    const preservedLocalMcp = sanitizeLocalMcp(existing?.localMcp);
-    // The grant is the one exception, and only for the facts its approval was
-    // anchored to: the dialog named a database, so an edit that repoints the
-    // profile at a different one — or at different schemas, or at a different
-    // credential state — must ask again rather than carry the grant over to a
-    // record the user never saw. Label, colour and timeout edits keep it.
+    // Two things are anchored to the connection the user last saw, and for the
+    // same reason. The row-access grant: the dialog named a database, so an
+    // edit that repoints the profile at a different one — or at different
+    // schemas, or at a different credential state — must ask again rather than
+    // carry the grant over to a record the user never saw. And the local-MCP
+    // allocation, which is what an AI client's config points at: keeping it
+    // across a repoint means a pasted entry silently answers for another
+    // database, under the same name, with nothing on either side to notice.
+    // That is precisely the failure the locator design rejected an earlier
+    // option for; it covered delete-then-recreate and not edit-in-place, and
+    // the allocation sat outside this rule until it did.
+    //
+    // Stickiness is not violated by this. A port stays fixed so that a config
+    // the user has already pasted keeps working — for THIS database. Once the
+    // profile names another one, invalidating that config is the point: the
+    // fresh capability path 404s a pasted URL, and the fresh locator id makes
+    // the bridge fail explicitly instead of relaying somewhere new. Label,
+    // colour and timeout edits change neither.
+    //
+    // Ordering is what makes the discard safe: main stops a running server
+    // before the store is written, and stopping withdraws that profile's
+    // locator — so the file is gone before the allocation naming it is. That
+    // holds because main's stop condition compares the URL WITH the password
+    // joined in, which every change this identity notices also changes. It is
+    // an invariant across two modules and nothing enforces it, so note the one
+    // shape that breaks it: a profiles.json whose `url` field carries a
+    // password (this app never writes one, but a hand-edited file can). Saving
+    // that URL unchanged looks identical to main while flipping hasPassword
+    // here, discarding the allocation under a still-running server and leaving
+    // its locator until the next launch sweeps it. A stale locator can only
+    // make the bridge fail or reach the server it already named, never a new
+    // one — so this is a leak of a file, not of a destination.
     const storedRowAccess = sanitizeRowAccess(existing?.rowAccess);
-    const grantStillAnchored =
+    const connectionUnchanged =
       existing !== undefined &&
       rowAccessIdentity({
         url: existing.url,
@@ -287,7 +313,8 @@ export class ProfileStore {
           schemas: input.schemas,
           hasPassword: encryptedPassword !== undefined,
         });
-    const preservedRowAccess = grantStillAnchored ? storedRowAccess : undefined;
+    const preservedRowAccess = connectionUnchanged ? storedRowAccess : undefined;
+    const preservedLocalMcp = connectionUnchanged ? sanitizeLocalMcp(existing?.localMcp) : undefined;
     const remoteMcp: RemoteMcpDeclaration | undefined =
       input.remoteMcp === undefined
         ? existing?.remoteMcp
@@ -375,10 +402,12 @@ export class ProfileStore {
 
   /** The profile's local-MCP allocation, assigning port + capability path on
    *  first use (a shape-invalid stored value counts as absent and is
-   *  replaced). Sticky: a valid existing allocation is returned unchanged —
-   *  see reassignLocalMcpPort for the explicit user path. A fresh capability
-   *  path is generated per allocation and never reused across profiles, so a
-   *  recycled port never answers on a stale path. */
+   *  replaced). Sticky within one connection: a valid existing allocation is
+   *  returned unchanged — see reassignLocalMcpPort for the explicit user path,
+   *  and upsert for the repoint that discards it. A fresh capability path is
+   *  generated per allocation and never reused across profiles, so a recycled
+   *  port never answers on a stale path — which is also what makes a discarded
+   *  allocation safe to replace on the same port. */
   ensureLocalMcpAllocation(name: string): LocalMcpAllocation & { bridgeId: string } {
     const data = this.read();
     const p = this.findProfile(data, name);

@@ -1,11 +1,18 @@
 // Local-MCP port and capability-path allocation.
 //
-// Ports are sticky: assigned once from 3335 upward, persisted, and only
-// changed by an explicit user reassignment. A transient EADDRINUSE must NOT
-// silently renumber — the persisted port is referenced by AI-client configs
-// the user has already pasted, and renumbering would invalidate them without
-// updating those files. 3334 is skipped on purpose: it is the kozou CLI's
-// default HTTP port, and a manually run `kozou mcp --http` would collide.
+// Ports are sticky while a profile keeps naming the same connection: assigned
+// once from 3335 upward, persisted, and never silently renumbered. A transient
+// EADDRINUSE must NOT renumber — the persisted port is referenced by AI-client
+// configs the user has already pasted, and renumbering would invalidate them
+// without updating those files. Two things move a port, and they differ in
+// what survives. An explicit user reassignment changes the port and KEEPS the
+// rest (path, autoStart, bridge id), so a pasted bridge entry — which resolves
+// the port at run time — keeps working across it. An edit that changes the
+// profile's connection identity (its database, its schema set, or whether a
+// password is stored — see profileStore.upsert) discards the allocation whole,
+// and there invalidating those configs is exactly what is wanted. 3334 is
+// skipped on purpose: it is the kozou CLI's default HTTP port, and a manually
+// run `kozou mcp --http` would collide.
 
 import { randomBytes } from 'node:crypto';
 
