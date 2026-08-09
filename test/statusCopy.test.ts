@@ -20,6 +20,7 @@ import {
   MCP_ALLOW_LABEL,
   MCP_ALLOW_NOTE,
   MCP_NOT_ALLOWED,
+  bridgeMissingNote,
   mcpStopWarning,
   REMOTE_DECLARED,
   rowAccessNote,
@@ -260,6 +261,26 @@ describe('config panel note', () => {
     // And stays inside what is known: the app knows its own bind failed, nothing
     // about what holds the port.
     expect(note).not.toMatch(/malicious|attacker|another kozou|hostile|unsafe/i);
+  });
+
+  it('names a way out for each reason the bridge entry is missing, and stays quiet when it is there', () => {
+    // Neither missing state is reachable from a test that drives the app — one
+    // needs an allocation from a build without locators, the other needs the
+    // launcher IPC to reject — so this is the only place the branch is
+    // exercised at all. Silence for both is what makes a build look like it has
+    // no bridge, and the two ways out are different actions.
+    expect(bridgeMissingNote(true, true)).toBeNull();
+    expect(bridgeMissingNote(true, false)).toBeNull();
+    const noId = bridgeMissingNote(false, false);
+    const noLauncher = bridgeMissingNote(false, true);
+    expect(noId).not.toBeNull();
+    expect(noLauncher).not.toBeNull();
+    // Not the same sentence twice: a user who has never started this profile is
+    // told to start it, and one hitting a failed read is not sent to do
+    // something that will not help.
+    expect(noId).not.toBe(noLauncher);
+    expect(noId).toMatch(/start this profile/i);
+    expect(noLauncher).not.toMatch(/start this profile/i);
   });
 
   it('does not tell you to start a profile whose start was refused', () => {

@@ -11,7 +11,7 @@
 // Requires: `pnpm build` first and a reachable PostgreSQL via
 // KOZOU_TEST_DATABASE_URL (same provisioning as app.spec.ts).
 
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
@@ -149,6 +149,34 @@ test('local MCP lifecycle: default off, start, quit closes the port, restore, st
   await first.page.getByTestId('mcp-config-alpha').click();
   await expect(first.page.getByTestId('mcp-snippet-json')).toContainText('kozou-local-alpha');
   await expect(first.page.getByTestId('mcp-snippet-json')).toContainText(`http://127.0.0.1:${port}/mcp-`);
+
+  // The bridge entry for a client that launches a command instead of taking a
+  // URL. Asserted here as well as in the unit test because this is the panel
+  // the user copies from, and because it is where the app's own claim about
+  // the entry — that the capability path is NOT in it — has to hold.
+  const desktopEntry = first.page.getByTestId('mcp-snippet-desktop-json');
+  await expect(desktopEntry).toContainText('kozou-local-alpha');
+  await expect(desktopEntry).toContainText('ELECTRON_RUN_AS_NODE');
+  const desktopText = (await desktopEntry.textContent()) ?? '';
+  expect(desktopText).not.toContain(running.path!);
+  expect(desktopText).not.toContain('127.0.0.1');
+  const entry = (
+    JSON.parse(desktopText) as {
+      mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }>;
+    }
+  ).mcpServers['kozou-local-alpha']!;
+  // Both paths must be absolute AND exist. The unit test cannot check this — it
+  // is handed a fixture — and nothing else can either: CI never runs `pnpm
+  // dist`, so a launcher that resolved against the cwd, or a bare `node` as the
+  // command, would pass every check in the repository and fail only in a
+  // packaged app on a user's machine.
+  expect(existsSync(entry.command)).toBe(true);
+  expect(existsSync(entry.args[0]!)).toBe(true);
+  // This profile's locator, not just any well-formed id. The unit test pins the
+  // shape of what the builder is given; only here is it visible that the screen
+  // hands it the id belonging to the profile whose name is on the entry.
+  expect(entry.args.slice(1)).toEqual(['--id', running.bridgeId]);
+  expect(running.bridgeId).toMatch(/^[0-9a-f]{32}$/);
 
   // --- app quit closes the listener (no orphans) -----------------------------
   await first.app.close();

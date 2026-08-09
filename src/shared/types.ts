@@ -289,6 +289,19 @@ export type McpStatusEntry = {
   autoStart: boolean;
   /** Sanitized failure detail for error states. */
   error?: string;
+  /** This profile's bridge locator id (see LocalMcpAllocation.bridgeId), so
+   *  the renderer can offer a stdio-bridge entry for it. Not a secret — the
+   *  capability path is, and that stays in the locator file. */
+  bridgeId?: string;
+};
+
+/** How to launch this app's stdio bridge: the app's own binary run as Node,
+ *  plus the bridge script inside the bundle. Both are absolute paths, so a
+ *  moved or rebuilt app makes an entry a client already holds stale — the
+ *  bridge fails explicitly on that rather than reaching some other server. */
+export type McpBridgeLauncher = {
+  command: string;
+  script: string;
 };
 
 /** Result of a start request. 'blocked-duplicate' means a declared remote
@@ -357,6 +370,9 @@ export type KozouDesktopApi = {
   mcpStop(name: string): Promise<McpStatusEntry[]>;
   mcpStatus(): Promise<McpStatusEntry[]>;
   mcpReassignPort(name: string): Promise<McpStatusEntry[]>;
+  /** Where the stdio bridge lives, for building a Claude Desktop entry. Asked
+   *  once: it is a property of this installation, not of a profile. */
+  mcpBridgeLauncher(): Promise<McpBridgeLauncher>;
   /** Ask main to change a profile's row-access level. The renderer can only
    *  ask: an escalation is persisted after a native approval dialog and
    *  resolves to the unchanged level when the user declines. Downgrades
@@ -404,6 +420,7 @@ export const IPC = {
   mcpStop: 'mcp:stop',
   mcpStatus: 'mcp:status',
   mcpReassignPort: 'mcp:reassign-port',
+  mcpBridgeLauncher: 'mcp:bridge-launcher',
   /** Row-access grant requests ride their own channel, kept apart from the
    *  profile-save channel so a capability change is always an explicit act. */
   dataSetRowAccess: 'data:set-row-access',

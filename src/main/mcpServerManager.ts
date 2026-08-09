@@ -101,6 +101,7 @@ export class McpServerManager {
         port: p.localMcp?.port,
         path: p.localMcp?.path,
         autoStart: p.localMcp?.autoStart ?? false,
+        ...(p.localMcp?.bridgeId !== undefined ? { bridgeId: p.localMcp.bridgeId } : {}),
         ...(e?.error !== undefined ? { error: e.error } : {}),
       };
     });

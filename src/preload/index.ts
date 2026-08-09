@@ -23,6 +23,7 @@ const api: KozouDesktopApi = {
   mcpStop: (name: string) => ipcRenderer.invoke(IPC.mcpStop, name),
   mcpStatus: () => ipcRenderer.invoke(IPC.mcpStatus),
   mcpReassignPort: (name: string) => ipcRenderer.invoke(IPC.mcpReassignPort, name),
+  mcpBridgeLauncher: () => ipcRenderer.invoke(IPC.mcpBridgeLauncher),
   requestRowAccess: (name: string, level: RowAccess) => ipcRenderer.invoke(IPC.dataSetRowAccess, name, level),
   dataList: (name: string, resource: string, params?: DataListParams) =>
     ipcRenderer.invoke(IPC.dataList, name, resource, params),

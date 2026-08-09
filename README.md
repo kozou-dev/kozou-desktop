@@ -100,21 +100,57 @@ and the bare URL, for any client that takes one directly:
 http://127.0.0.1:3335/mcp-<random>
 ```
 
-**Claude Desktop cannot reach this server.** Its custom connectors are opened
+**Claude Desktop does not connect to a URL.** Its custom connectors are opened
 from Anthropic's cloud rather than from your machine and require a publicly
 reachable `https` address, so `127.0.0.1` is not something they can resolve to
 your Mac — adding TLS would not help, and exposing the hub publicly is the
 opposite of what it is for. Its own configuration file launches local commands
-(stdio) rather than connecting to a URL. Reaching the hub from there needs a
-local stdio-to-HTTP bridge process.
+(stdio) instead. Reaching the hub from there needs a local stdio-to-HTTP bridge
+process, and this build both **contains** one (`EGRESS.md` item 16 describes what
+it may and may not do) and **offers** it — the same panel hands you a fourth
+shape, an entry that starts it:
 
-This build **contains** such a bridge (`EGRESS.md` item 16 describes what it may
-and may not do) but does not yet **offer** it: no panel hands you an entry for
-it. A hand-written entry has been tried once and carried a whole exchange: on
-2026-08-07 Claude Desktop 1.26832.0 spawned the bridge, completed the MCP
-handshake, and later called tools over it from its own chat — two calls, both
-answered. What is missing is the config, not the path: that entry was written by
-hand, and nothing here produces one for you.
+```json
+{
+  "mcpServers": {
+    "kozou-local-<profile>": {
+      "command": "/Applications/Kozou.app/Contents/MacOS/Kozou",
+      "args": [
+        "/Applications/Kozou.app/Contents/Resources/app.asar/out/main/stdioBridge.js",
+        "--id",
+        "<locator id>"
+      ],
+      "env": { "ELECTRON_RUN_AS_NODE": "1" }
+    }
+  }
+}
+```
+
+Three things to know about it. It names a **locator**, not a URL, so unlike the
+three shapes above it leaves the capability path out of another application's
+configuration file — the bridge reads the port and the path from a file this app
+owns and keeps to itself. Claude Desktop keeps every server it launches in one
+file, so add this **inside** the `mcpServers` object already there rather than
+replacing the file, and restart it afterwards (it reads that file at startup).
+
+And its paths are **absolute**, naming this app where it is now. Two failure
+modes follow, and only one of them this app can speak to: move the app and your
+client's launch fails with nothing to explain it — that happens in the client,
+before any code here runs. What the bridge does report is the *server*: with no
+server published for that profile it says so and starts nothing (`EGRESS.md`
+item 16, property (d)). Rebuilding the app in place changes neither path.
+
+What has actually been run, by hand: on **2026-08-09**, Claude Desktop 1.26832.0 was
+given the entry **this app produced**, spawned the bridge from it, completed the MCP
+handshake, and then **answered from its own chat** over that entry — the client's log
+records two `tools/call` requests, each answered, and the chat's replies carried the
+database's compiled semantics. Stopping the app and calling again over the same entry
+produced the explicit failure it is supposed to: a JSON-RPC error naming a refused
+connection, with nothing started on its own.
+
+An earlier run (2026-08-07) reached the same point with an entry written by hand;
+the relay has changed since then. One machine, one client version, one run;
+`EGRESS.md` keeps the full scope of what that does and does not establish.
 
 One server per profile, so several databases can be served at once — each under
 its own name, port and path. What is in one place is the managing of them: you
