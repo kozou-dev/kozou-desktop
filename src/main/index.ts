@@ -335,6 +335,14 @@ void app.whenReady().then(() => {
     if (typeof name !== 'string') throw new Error('profile name must be a string');
     return mcpManager.reassignPort(name);
   });
+  // Where a client would find the bridge. Read from this process rather than
+  // built in the renderer: only main knows where the app actually is, and the
+  // script sits beside it in the same build output (packaged: inside app.asar,
+  // which the binary can run as Node).
+  ipcMain.handle(IPC.mcpBridgeLauncher, () => ({
+    command: process.execPath,
+    script: join(import.meta.dirname, 'stdioBridge.js'),
+  }));
 
   createWindow();
 

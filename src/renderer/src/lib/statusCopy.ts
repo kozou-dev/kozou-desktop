@@ -136,7 +136,15 @@ export function rowAccessNote(level: RowAccess): string {
  *  starting was refused, not attempted, so "start it" understates what it takes.
  *
  *  Nothing here says the port is free, or that the other process is malicious, or
- *  what it is: the app knows only that its own bind failed. */
+ *  what it is: the app knows only that its own bind failed.
+ *
+ *  The port-busy line says "this config", covering the bridge entry as well as
+ *  the URL shapes. Scoping it to URLs was tried and withdrawn: it rested on
+ *  "a locator exists only while this app is serving", which EGRESS.md item 16
+ *  records with two gaps — a `SIGKILL`ed main leaves one until the next launch,
+ *  and a failed unlink is swallowed. Through either gap a stale locator still
+ *  names this port, so a bridge started from that entry relays to whatever took
+ *  it. Rarer than the URL case, not excluded from it. */
 export function snippetServerNote(status: McpServerStatus | undefined): string | null {
   switch (status) {
     case 'running':
@@ -148,4 +156,23 @@ export function snippetServerNote(status: McpServerStatus | undefined): string |
     default:
       return 'server currently stopped - start it before connecting';
   }
+}
+
+/** Why the config panel has no Claude Desktop entry, or null when it has one.
+ *
+ *  A function rather than markup so the branch can be tested: neither state is
+ *  reachable from a test that drives the app (one needs an allocation written
+ *  by an older build, the other needs the launcher IPC to reject), and a branch
+ *  no suite can enter is a branch that rots.
+ *
+ *  Silence for both was the first shape, and it is what makes a build look like
+ *  it has no bridge at all — the worst failure for this surface in particular,
+ *  because everything downstream of it happens inside another application. The
+ *  two states are kept apart because the ways out differ: one is a thing the
+ *  user does, the other is this app failing to read its own install path. */
+export function bridgeMissingNote(hasEntry: boolean, hasBridgeId: boolean): string | null {
+  if (hasEntry) return null;
+  return hasBridgeId
+    ? 'the Claude Desktop entry is unavailable - this app could not read its own install path'
+    : 'start this profile’s server once and the Claude Desktop entry appears here';
 }

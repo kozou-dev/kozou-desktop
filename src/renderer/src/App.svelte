@@ -2,6 +2,7 @@
   import type { ContextView } from '../../shared/contextView';
   import type {
     InspectResult,
+    McpBridgeLauncher,
     McpMode,
     McpStatusEntry,
     ProfileView,
@@ -18,7 +19,13 @@
   import SemanticMap from './SemanticMap.svelte';
   import { buildMcpClientSnippets } from '../../shared/mcpSnippet';
   import type { CommentDraft } from './lib/commentEmit';
-  import { MCP_ALLOW_LABEL, MCP_ALLOW_NOTE, mcpStopWarning, snippetServerNote } from './lib/statusCopy';
+  import {
+    MCP_ALLOW_LABEL,
+    MCP_ALLOW_NOTE,
+    bridgeMissingNote,
+    mcpStopWarning,
+    snippetServerNote,
+  } from './lib/statusCopy';
 
   const api = window.kozouDesktop;
 
@@ -105,6 +112,10 @@
   // rebuild is applied, and nothing renders from it.
   let refocusMode = false;
   let snippetFor = $state<string | null>(null);
+  /** Where the bridge lives — a property of the installation, not of a profile,
+   *  so it is asked for once and kept. Null until it has arrived, or after a
+   *  failed ask; `loadBridgeLauncher` re-asks when a config panel is opened. */
+  let bridgeLauncher = $state<McpBridgeLauncher | null>(null);
 
   const runningCount = $derived(
     Object.values(mcp).filter((s) => s.status === 'running' || s.status === 'starting').length,
@@ -113,8 +124,18 @@
     if (snippetFor === null) return null;
     const st = mcp[snippetFor];
     if (st?.port === undefined || st.path === undefined) return null;
-    return buildMcpClientSnippets(snippetFor, st.port, st.path);
+    // The bridge entry needs two facts this screen does not own: where the app
+    // is (`bridgeLauncher`, asked of main) and which locator names this
+    // profile's server (`bridgeId`). Either can be missing, for more than one
+    // reason each, so the panel says which of the two it is rather than
+    // dropping the row silently — see `bridgeMissing`.
+    const bridge =
+      bridgeLauncher !== null && st.bridgeId !== undefined
+        ? { launcher: bridgeLauncher, id: st.bridgeId }
+        : undefined;
+    return buildMcpClientSnippets(snippetFor, st.port, st.path, bridge);
   });
+
   function applyMcpStatus(entries: McpStatusEntry[]): void {
     const next: Record<string, McpStatusEntry> = {};
     for (const e of entries) next[e.profile] = e;
@@ -144,6 +165,34 @@
     }
   }
   api.onMcpStatusChanged(applyMcpStatus);
+
+  /** Separate from `initMcp` on purpose: this read says nothing about the
+   *  permission or about what is running, so failing it must not put the
+   *  screen into the state that stops speaking for those. A failure costs the
+   *  bridge entry and nothing else.
+   *
+   *  Re-asked whenever a config panel is opened without one, rather than only
+   *  at launch: a single rejected invoke at startup otherwise removed the
+   *  bridge entry for every profile for the rest of the session, with no
+   *  control on screen to try again and nothing saying why it was gone.
+   *  `asking` keeps a slow answer from queueing one request per click. */
+  let askingLauncher = false;
+  async function loadBridgeLauncher(): Promise<void> {
+    if (bridgeLauncher !== null || askingLauncher) return;
+    askingLauncher = true;
+    try {
+      bridgeLauncher = await api.mcpBridgeLauncher();
+    } catch {
+      bridgeLauncher = null;
+    } finally {
+      askingLauncher = false;
+    }
+  }
+
+  function toggleSnippet(name: string): void {
+    snippetFor = shownSnippetFor === name ? null : name;
+    if (snippetFor !== null) void loadBridgeLauncher();
+  }
 
   /** Withdrawing the permission while servers are up asks first (they are asked
    *  to stop; per-profile autoStart intents survive for the next launch). */
@@ -428,6 +477,16 @@
   const snippetServerLine = $derived(
     shownSnippetFor === null ? null : snippetServerNote(mcp[shownSnippetFor]?.status),
   );
+  /** Why there is no Claude Desktop entry, or null when there is one — see
+   *  `bridgeMissingNote` for why this surface does not simply go quiet. */
+  const bridgeMissing = $derived(
+    shownSnippetFor === null || snippet === null
+      ? null
+      : bridgeMissingNote(
+          snippet.claudeDesktopJson !== undefined,
+          mcp[shownSnippetFor]?.bridgeId !== undefined,
+        ),
+  );
   const current = $derived(selectedProfile ? (results[selectedProfile] ?? null) : null);
   const currentContext = $derived(current?.ok ? (current.context as ContextView) : null);
 
@@ -562,6 +621,7 @@
 
   void refresh();
   void initMcp();
+  void loadBridgeLauncher();
 </script>
 
 <main>
@@ -709,13 +769,49 @@
         credential-adjacent file. The server listens on 127.0.0.1 only and serves read-only
         describe tools.
       </p>
-      <p class="form-hint">
-        Claude Desktop cannot reach this server: its custom connectors are opened from
-        Anthropic's cloud and need a publicly reachable https address, and its own config
-        file launches local commands rather than connecting to a URL. Reaching it from
-        there needs a local stdio bridge. This app now contains one, but does not hand
-        you an entry for it yet - nothing here has been run against Claude Desktop.
-      </p>
+      <!-- With an entry, or with the reason there is none: see `bridgeMissing`
+           for why this surface does not go silent. -->
+      {#if snippet.claudeDesktopJson !== undefined}
+        <div class="snippet-row">
+          <span>Claude Desktop (starts the bridge)</span>
+          <button onclick={() => snippet?.claudeDesktopJson !== undefined && copyText(snippet.claudeDesktopJson)}>
+            copy
+          </button>
+        </div>
+        <pre data-testid="mcp-snippet-desktop-json">{snippet.claudeDesktopJson}</pre>
+        <p class="form-hint">
+          Claude Desktop does not connect to a URL: its config file launches a local
+          command, and its custom connectors are opened from Anthropic's cloud and need a
+          publicly reachable https address. So this entry starts this app's stdio bridge,
+          which relays to the same server. It carries no secret path - the bridge is
+          pointed at a locator this app writes, and reads the port and path from there.
+        </p>
+        <p class="form-hint">
+          Claude Desktop keeps every server it launches in one file, so add this inside
+          the <code>mcpServers</code> object that is already there rather than replacing
+          the file with it. It reads that file when it starts, so restart it afterwards.
+        </p>
+        <!-- Two failure modes, deliberately not merged: one this app answers
+             for and one it cannot. A missing executable fails in the client
+             before any code here runs, so promising an explanation for it (an
+             earlier draft did) claims a message the bridge cannot emit. -->
+        <p class="form-hint">
+          The paths in it are absolute and name this app where it is now. Move the app and
+          your client's launch fails with nothing to explain it - that happens before any
+          of this app's code runs. What this app does answer for is the server: if it is
+          not serving this profile, the bridge starts and reports that.
+        </p>
+        <p class="form-hint">
+          An entry produced here has been started by Claude Desktop once, by hand, on
+          2026-08-09 - one machine, one client version, one run. What that does and does
+          not establish is recorded in EGRESS.md.
+        </p>
+      {:else if bridgeMissing !== null}
+        <p class="form-hint" data-testid="mcp-snippet-desktop-missing">
+          Claude Desktop needs an entry that starts this app's stdio bridge, not a URL -
+          {bridgeMissing}.
+        </p>
+      {/if}
     </section>
   {/if}
 
@@ -774,7 +870,7 @@
             onmcpoverride={(name) => void mcpStart(name, true)}
             onmcpcancel={() => (duplicatePending = null)}
             onmcpreassign={(name) => void mcpReassign(name)}
-          onmcpconfig={(name) => (snippetFor = shownSnippetFor === name ? null : name)}
+          onmcpconfig={(name) => toggleSnippet(name)}
         />
       {:else}
         <ProfileBar
@@ -794,7 +890,7 @@
           onmcpoverride={(name) => void mcpStart(name, true)}
           onmcpcancel={() => (duplicatePending = null)}
           onmcpreassign={(name) => void mcpReassign(name)}
-          onmcpconfig={(name) => (snippetFor = shownSnippetFor === name ? null : name)}
+          onmcpconfig={(name) => toggleSnippet(name)}
         />
         <section class="workspace">
           {#if inspecting === selectedProfile && !current}
