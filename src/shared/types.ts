@@ -20,9 +20,15 @@
  *  a stored 'remote-only' degrades to the 'off' it already behaved as. */
 export type McpMode = 'off' | 'local';
 
-/** Main-assigned local-MCP allocation for one profile. Sticky by design:
- *  the port is assigned once and only changes on an explicit reassignment,
- *  because AI-client configs the user has already pasted reference it. */
+/** Main-assigned local-MCP allocation for one profile. Sticky for as long as
+ *  the profile names the same connection: the port is assigned once and never
+ *  silently renumbered, because AI-client configs the user has already pasted
+ *  reference it. Two things replace it — an explicit reassignment (a bind
+ *  conflict the user resolves), and an edit that repoints the profile at
+ *  another database, at other schemas, or at another credential state. The
+ *  second is the point rather than a side effect: a config pasted for one
+ *  database has to stop resolving instead of answering for a different one
+ *  under the same name. */
 export type LocalMcpAllocation = {
   port: number;
   /** Random capability path ("/mcp-<hex>"). Raises the bar from "any local
@@ -30,14 +36,19 @@ export type LocalMcpAllocation = {
    *  not authentication and lands in AI-client configs in plaintext. */
   path: string;
   /** Start this profile's server on app launch. Set true by an explicit
-   *  start and false by an explicit stop — never toggled implicitly. */
+   *  start and false by an explicit stop; it is never flipped on its own, but
+   *  it does not outlive the allocation it lives in — repointing the profile
+   *  discards both, so a profile that now names another database does not
+   *  auto-start against it. Getting it back is the same explicit start it
+   *  always was. */
   autoStart: boolean;
   /** Opaque id naming this profile's bridge locator (see
    *  shared/mcpLocator.ts). Optional so an allocation written by an earlier
    *  build stays valid — it is minted on next use rather than renumbering a
-   *  port an AI-client config already points at. Deleting and recreating a
-   *  profile mints a new one, so a stale config fails instead of silently
-   *  reconnecting to a different database. */
+   *  port an AI-client config already points at. A new one is minted whenever
+   *  the profile stops naming the connection this id was handed out for —
+   *  deleting and recreating it, and equally repointing it — so a stale config
+   *  fails instead of silently reconnecting to a different database. */
   bridgeId?: string;
 };
 
