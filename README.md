@@ -176,16 +176,22 @@ Worth knowing before you paste:
 
 - **The app bounds the listener's lifetime.** Quitting closes the port. A
   profile you started comes back on the next launch until you press **stop** —
-  with two exceptions. Repointing a profile at another database (or at other
-  schemas, or at a different credential state) drops that intent along with the
-  allocation it lives in, so a repointed profile does not auto-start against a
-  database you have not started it for. And a profile you started over the
-  duplicate-declaration
-  warning is left at `MCP blocked (duplicate)` at launch instead, because
-  restoring one would mean re-asking, and the app raises no dialogs while
-  starting up. An edit that repoints a profile at a different URL or different
-  schemas stops its server rather than serving the old database under the same
-  name (the badge says so; restarting it is a deliberate click).
+  with three exceptions. Repointing a profile at another database drops that
+  intent along with the allocation it lives in, so a repointed profile does not
+  auto-start against a database you have not started it for. **Adding a schema**
+  drops the intent too while keeping the allocation: what you pasted still names
+  this database, but it would reach the added schemas on the next launch without
+  you doing anything, so starting it again is how you say yes to that. Narrowing
+  the schema list, rotating or removing the stored password, and changing the role
+  are none of those: they stop the running server — it was connected with the old
+  ones — and the profile comes back on the next launch as before. (The row-access
+  grant is a different matter and drops on all of them — see above.) And a profile
+  you started over the duplicate-declaration warning is left at
+  `MCP blocked (duplicate)` at launch instead, because restoring one would mean
+  re-asking, and the app raises no dialogs while starting up. Any edit that
+  changes what the connection reaches — the database, the schema list, the stored
+  password — stops the server rather than serving the old one under the same name,
+  and the badge says so.
 - **The port is sticky while the profile names the same database** — assigned
   once from 3335 upward (3334 is skipped: it is the kozou CLI's own default) and
   never silently renumbered, because the configs you pasted name it. A bind
@@ -193,10 +199,16 @@ Worth knowing before you paste:
   being resolved behind your back, and while that lasts the database's MCP row
   stops offering to open the config panel (a panel you already had open keeps
   showing the snippet, and says the server is not running). The other thing that
-  replaces it is an edit that changes what the profile connects to — another
-  database, another schema set, or adding/removing the stored password — and
+  replaces it is an edit that points the profile at **another database**, and
   there the invalidation is the point: a config you pasted for one database
   stops resolving rather than quietly serving the new one under the old name.
+  Only the database does this, and "the same database" means the same host, port
+  and database name — the app's own definition, the one behind the duplicate
+  warning, so `:5432` and the default port are not two databases. Changing the
+  schema list, the stored password or the role stops the running server — it was
+  connected with the old ones — but the port, the path and the locator id survive,
+  so what you pasted still names the same database and resolves again as soon as
+  the server is back.
   The bridge entry fails immediately, on a locator id nothing answers for; a
   pasted URL stops resolving once the old server is actually down, which is
   normally at once and takes up to three seconds if that worker ignores the

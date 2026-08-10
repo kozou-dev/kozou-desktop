@@ -218,11 +218,10 @@ describe('ProfileStore local MCP fields', () => {
     expect(store.list()[0]!.localMcp).toEqual(alloc);
   });
 
-  // The allocation is what an AI client's config points at, so it lives as long
-  // as the connection it was handed out for — the same rule as the row-access
-  // grant, and for a sharper reason: a preserved allocation makes a pasted
-  // entry answer for another database under the same name, with nothing on
-  // either side to notice.
+  // The allocation is what an AI client's config points at, so it lives as long as
+  // the DATABASE it was handed out for — a narrower rule than the row-access
+  // grant's, because a preserved allocation only misleads when it makes a pasted
+  // entry answer for another database under the same name.
   it('drops the local-MCP allocation when an edit repoints the profile at another database', () => {
     const { store } = freshStore();
     store.upsert({ name: 'a', ...base });
@@ -240,18 +239,152 @@ describe('ProfileStore local MCP fields', () => {
     expect(after.bridgeId).not.toBe(before.bridgeId);
   });
 
-  it('drops the local-MCP allocation when the schema set changes', () => {
+  // The allocation is a destination, not an authorization, so it is anchored to
+  // the database and nothing else. The grant is anchored to more, and these two
+  // tests are the pair that says so.
+  // A repoint is any of host, port or database — not just the database name, which
+  // was the only one covered. A comparison on the pathname alone would pass that
+  // one test while a prod-to-staging edit kept the port, path, bridge id and
+  // autoStart of the database the config was pasted for.
+  it('drops the allocation when the host or the port changes, not only the database name', () => {
+    for (const repointed of [
+      'postgresql://u@other-host:5432/db',
+      'postgresql://u@h:5433/db',
+      'postgresql://u@h:5432/other',
+    ]) {
+      const { store } = freshStore();
+      store.upsert({ name: 'a', ...base });
+      const before = store.ensureLocalMcpAllocation('a');
+      store.upsert({ name: 'a', url: repointed, schemas: ['public'] });
+      expect(store.list()[0]!.localMcp, repointed).toBeUndefined();
+      const after = store.ensureLocalMcpAllocation('a');
+      expect(after.path, repointed).not.toBe(before.path);
+      expect(after.bridgeId, repointed).not.toBe(before.bridgeId);
+    }
+  });
+
+  // The username is not part of `dbIdentityKey` on purpose (the same database
+  // reached by two roles is one database), so a role change keeps the destination.
+  // The grant is what re-asks, and it does.
+  it('keeps the allocation across a role change, and still drops the grant', () => {
     const { store } = freshStore();
     store.upsert({ name: 'a', ...base });
-    store.ensureLocalMcpAllocation('a');
-    store.upsert({ name: 'a', url: base.url, schemas: ['public', 'sales'] });
+    const alloc = store.ensureLocalMcpAllocation('a');
+    store.setRowAccess('a', 'read');
+    store.upsert({ name: 'a', url: 'postgresql://admin@h:5432/db', schemas: ['public'] });
+    expect(store.list()[0]!.localMcp).toEqual(alloc);
+    expect(store.list()[0]!.rowAccess).toBe('off');
+  });
+
+  // Spellings of one database. There is no edit form in this app, so a schema
+  // change means retyping the URL, and every one of these is a plausible retype.
+  it('keeps the allocation across spellings of the same database', () => {
+    for (const same of [
+      'postgresql://u@h/db',
+      'postgres://u@h:5432/db',
+      'postgresql://u:pw@h:5432/db',
+    ]) {
+      const { store } = freshStore();
+      store.upsert({ name: 'a', ...base });
+      const alloc = store.ensureLocalMcpAllocation('a');
+      store.upsert({ name: 'a', url: same, schemas: ['public'] });
+      expect(store.list()[0]!.localMcp, same).toEqual(alloc);
+    }
+  });
+
+  // `dbIdentityKey` declines URLs whose query params can redirect the connection
+  // (`?host=`, `?dbname=`, ...), and two declines are not evidence of sameness. The
+  // normalized-string fallback is what keeps a byte-identical re-save of one of
+  // those from reading as a repoint - which matters because main would not stop the
+  // server for it, and a discarded allocation would leave its locator behind.
+  it('falls back to the normalised URL for forms the identity key declines', () => {
+    const declined = 'postgresql://u@h:5432/db?dbname=other';
+    const { store } = freshStore();
+    store.upsert({ name: 'a', url: declined, schemas: ['public'] });
+    const alloc = store.ensureLocalMcpAllocation('a');
+
+    // Same string back: kept.
+    store.upsert({ name: 'a', url: declined, schemas: ['public'] });
+    expect(store.list()[0]!.localMcp).toEqual(alloc);
+
+    // A real edit to it: dropped, even though the key declines both sides.
+    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db?dbname=third', schemas: ['public'] });
     expect(store.list()[0]!.localMcp).toBeUndefined();
   });
 
-  it('keeps the local-MCP allocation across a password rotation but not a change of credential state', () => {
+  // autoStart is the field whose new survival is the point, and it is false in a
+  // fresh allocation - so every other test here would pass with autoStart hard-wired
+  // to false. These set it true first.
+  it('carries autoStart through a narrowing schema edit and clears it on a widening one', () => {
+    const wide = { name: 'a', url: base.url, schemas: ['public', 'sales'] };
+
+    const narrowing = freshStore().store;
+    narrowing.upsert(wide);
+    narrowing.ensureLocalMcpAllocation('a');
+    narrowing.setLocalMcpAutoStart('a', true);
+    narrowing.upsert({ name: 'a', url: base.url, schemas: ['public'] });
+    expect(narrowing.list()[0]!.localMcp?.autoStart).toBe(true);
+
+    const widening = freshStore().store;
+    widening.upsert({ name: 'a', ...base });
+    const alloc = widening.ensureLocalMcpAllocation('a');
+    widening.setLocalMcpAutoStart('a', true);
+    widening.upsert(wide);
+    const after = widening.list()[0]!.localMcp;
+    // The destination survives - what you pasted still names this database - and
+    // only the intent goes, so the wider set is served after a deliberate start.
+    expect(after?.port).toBe(alloc.port);
+    expect(after?.path).toBe(alloc.path);
+    expect(after?.bridgeId).toBe(alloc.bridgeId);
+    expect(after?.autoStart).toBe(false);
+  });
+
+  it('keeps the local-MCP allocation when the schema set changes, and still drops the grant', () => {
+    const { store } = freshStore();
+    store.upsert({ name: 'a', ...base });
+    const alloc = store.ensureLocalMcpAllocation('a');
+    store.setRowAccess('a', 'read');
+
+    // Adding a schema does not repoint anything, and this app tells the operator
+    // to do it (the detail pane's words for an out-of-schema relation are "Add
+    // its schema to the profile to inspect it"). A pasted config surviving that
+    // is the point: it names the same database, which is still the same database.
+    store.upsert({ name: 'a', url: base.url, schemas: ['public', 'sales'] });
+    expect(store.list()[0]!.localMcp).toEqual(alloc);
+    // The grant is a different question: widened schemas reach rows the approval
+    // dialog did not name.
+    expect(store.list()[0]!.rowAccess).toBe('off');
+  });
+
+  // The hole the narrowing closed. A hand-edited profiles.json can carry a
+  // password in `url` (this app never writes one there). Saving that URL back
+  // unchanged looks identical to main - which compares the URL with the password
+  // joined in, so it does not stop the server - while the store used to see the
+  // credential state flip and throw the allocation away underneath it, leaving a
+  // locator nothing would clean up until the next launch. Normalized and
+  // database-only, both sides now agree that nothing moved.
+  it('keeps the allocation when a hand-written password is normalised out of the stored URL', () => {
+    const { store, dir } = freshStore();
+    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
+    const alloc = store.ensureLocalMcpAllocation('a');
+
+    // Put the password into the url field the way a hand edit would.
+    const file = join(dir, 'profiles.json');
+    const data = JSON.parse(readFileSync(file, 'utf8'));
+    data.profiles[0].url = 'postgresql://u:pw@h:5432/db';
+    writeFileSync(file, JSON.stringify(data));
+    expect(store.list()[0]!.localMcp).toEqual(alloc);
+
+    // The same URL saved back: main sees no change, and neither does this.
+    store.upsert({ name: 'a', url: 'postgresql://u:pw@h:5432/db', schemas: ['public'] });
+    expect(store.list()[0]!.localMcp).toEqual(alloc);
+  });
+
+  it('keeps the local-MCP allocation across a password rotation and across a change of credential state', () => {
     const { store } = freshStore();
     store.upsert({ name: 'a', url: 'postgresql://u:old@h:5432/db', schemas: ['public'] });
     const alloc = store.ensureLocalMcpAllocation('a');
+    store.setRowAccess('a', 'read');
 
     // Same server, same database, same role: a client's config still points
     // where it did, so invalidating it would cost the user a repaste for
@@ -259,10 +392,11 @@ describe('ProfileStore local MCP fields', () => {
     store.upsert({ name: 'a', url: 'postgresql://u:new@h:5432/db', schemas: ['public'] });
     expect(store.list()[0]!.localMcp).toEqual(alloc);
 
-    // Dropping the stored password changes which credentials the served
-    // database is reached with — the same fact the grant is anchored to.
+    // Dropping the stored password changes which credentials the served database
+    // is reached with, which is the grant's business and not the destination's.
     store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
-    expect(store.list()[0]!.localMcp).toBeUndefined();
+    expect(store.list()[0]!.localMcp).toEqual(alloc);
+    expect(store.list()[0]!.rowAccess).toBe('off');
   });
 
   it('validates remoteMcp input at the IPC boundary', () => {

@@ -283,11 +283,14 @@ export class McpServerManager {
 
   /** A profile edit invalidates the running server's fork-time connection —
    *  stop it rather than silently serving the old database. Restart is a user
-   *  action. This method leaves autoStart alone, but the write that follows it
-   *  may not: an edit that changes the connection identity discards the whole
-   *  allocation, autoStart included (see ProfileStore.upsert), so a repointed
-   *  profile does not come back on its own. The caller decides relevance
-   *  (connection-bearing edits only). */
+   *  action. This method leaves autoStart alone, and the write that follows it
+   *  only takes it away when the edit names ANOTHER DATABASE: that discards the
+   *  whole allocation, autoStart included (see ProfileStore.upsert), so a
+   *  repointed profile does not come back on its own. An edit that keeps the same
+   *  database but changes what it is reached with — the schema list, the stored
+   *  password — stops the server here and keeps the intent, so it returns on the
+   *  next launch, still pointed where the operator started it. The caller decides
+   *  relevance (connection-bearing edits only). */
   async onProfileUpserted(name: string): Promise<void> {
     const entry = this.entries.get(name);
     if (entry?.child !== undefined) await this.kill(name, 'profile-updated');
