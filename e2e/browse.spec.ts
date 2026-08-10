@@ -132,6 +132,18 @@ async function launchWithProfile(
   return { app, page };
 }
 
+
+/** Select another relation on the map. Opening the Data tab collapses the map
+ *  to give the grid the workspace, so getting back to the map is a deliberate
+ *  step — the same one an operator takes, via the control in the tab row. */
+async function selectOnMap(page: Page, qualifiedName: string): Promise<void> {
+  const toggle = page.getByTestId('detail-expand');
+  if ((await toggle.count()) > 0 && (await toggle.getAttribute('aria-pressed')) === 'true') {
+    await toggle.click();
+  }
+  await page.getByTestId(`map-node-${qualifiedName}`).click({ timeout: 30_000 });
+}
+
 test('data tab: gated by the grant, browses rows, and pages by cursor', async () => {
   const { app, page } = await launchWithProfile('browse', 0);
 
@@ -152,7 +164,7 @@ test('data tab: gated by the grant, browses rows, and pages by cursor', async ()
     await expect(raNote).toContainText('editing needs an approval of its own');
     await expect(raNote).toContainText('while this is off');
 
-    await page.getByTestId('map-node-public.customers').click({ timeout: 30_000 });
+    await selectOnMap(page, 'public.customers');
     await expect(page.getByTestId('detail-pane')).toContainText('public.customers');
     await expect(page.getByTestId('tab-data')).toHaveCount(0);
 
@@ -181,7 +193,27 @@ test('data tab: gated by the grant, browses rows, and pages by cursor', async ()
     await expect(raNote).toContainText('Data tab');
     await expect(raNote).toContainText('your database decides');
 
+    // --- the Data tab takes the workspace, and gives it back ----------------
+    // A row grid in a ~40% column is what the layout work started from, so
+    // opening the tab collapses the map rather than sharing the row with it.
+    const map = page.getByTestId('semantic-map');
+    const expand = page.getByTestId('detail-expand');
+    await expect(map).toBeVisible();
+    await expect(expand).toHaveAttribute('aria-pressed', 'false');
+
     await page.getByTestId('tab-data').click();
+    await expect(map).toBeHidden();
+    await expect(expand).toHaveAttribute('aria-pressed', 'true');
+
+    // The control puts it back, and the pane stays on Data while it does: the
+    // two are separate questions (which tab, how wide).
+    await expect(page.getByTestId('data-grid')).toBeVisible({ timeout: 30_000 });
+    await expand.click();
+    await expect(map).toBeVisible();
+    await expect(page.getByTestId('data-grid')).toBeVisible();
+    await expand.click();
+    await expect(map).toBeHidden();
+
     const grid = page.getByTestId('data-grid');
     await expect(grid).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId('data-error')).toHaveCount(0);
@@ -247,7 +279,7 @@ test('data tab: gated by the grant, browses rows, and pages by cursor', async ()
     await expect(page.getByTestId('data-cut').first()).toBeVisible();
 
     // --- a view has no primary key: one page, and the pane says why ----------
-    await page.getByTestId('map-node-public.recent_orders').click();
+    await selectOnMap(page, 'public.recent_orders');
     await expect(page.getByTestId('detail-pane')).toContainText('public.recent_orders');
     await page.getByTestId('tab-data').click();
     await expect(page.getByTestId('data-no-keyset')).toBeVisible();
@@ -262,7 +294,7 @@ test('data tab: gated by the grant, browses rows, and pages by cursor', async ()
     // --- an emptied page still has a way back -------------------------------
     // kozou emits no cursors for an empty page, so both pager buttons go dead:
     // without an explicit "first page" the traversal would be stranded.
-    await page.getByTestId('map-node-public.customers').click();
+    await selectOnMap(page, 'public.customers');
     await page.getByTestId('tab-data').click();
     await page.getByTestId('data-page-size').selectOption(String(PAGE_SIZE));
     await expect(grid.locator('tbody tr')).toHaveCount(PAGE_SIZE);
@@ -309,7 +341,7 @@ test('a failed IPC leaves neither the badge nor the traversal position lying', a
   const badge = page.getByTestId('rowaccess-badge-failing');
 
   try {
-    await page.getByTestId('map-node-public.customers').click({ timeout: 30_000 });
+    await selectOnMap(page, 'public.customers');
 
     // --- the badge does not depend on a second round trip --------------------
     // The level is taken from what the grant call returned (main's post-change

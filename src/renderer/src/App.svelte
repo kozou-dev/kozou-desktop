@@ -112,6 +112,15 @@
   // rebuild is applied, and nothing renders from it.
   let refocusMode = false;
   let snippetFor = $state<string | null>(null);
+  /** Whether the detail pane has been given the whole workspace, collapsing the
+   *  map. Set by opening the Data tab and by the control in the tab row.
+   *
+   *  Lives here rather than in the pane because the map is the pane's sibling:
+   *  what gets collapsed is not the pane's to decide. It also has to outlive the
+   *  pane — selecting another relation remounts it, and losing the width on
+   *  every click would make the mode useless for the thing it exists for
+   *  (comparing rows across relations). */
+  let detailExpanded = $state(false);
   /** Where the bridge lives — a property of the installation, not of a profile,
    *  so it is asked for once and kept. Null until it has arrived, or after a
    *  failed ask; `loadBridgeLauncher` re-asks when a config panel is opened. */
@@ -487,6 +496,11 @@
           mcp[shownSnippetFor]?.bridgeId !== undefined,
         ),
   );
+  /** The expansion as it actually applies: only ever while a relation is
+   *  selected, since that is the only time the detail pane holds anything. The
+   *  intent survives in `detailExpanded` while nothing is selected, so going
+   *  back to a relation returns to the width the operator last chose. */
+  const detailShown = $derived(detailExpanded && selectedEntity !== null && selectedProfile !== null);
   const current = $derived(selectedProfile ? (results[selectedProfile] ?? null) : null);
   const currentContext = $derived(current?.ok ? (current.context as ContextView) : null);
 
@@ -905,7 +919,10 @@
                 current.stats.aiViewsBytes / 1024
               ).toFixed(1)}KiB AI views
             </p>
-            <div class="split">
+            <!-- `detailShown`, not `detailExpanded`: with nothing selected the
+                 pane beside the map is a placeholder, and collapsing the map to
+                 make room for it would leave the workspace showing neither. -->
+            <div class="split" class:expanded={detailShown}>
               <SemanticMap
                 context={currentContext}
                 selected={selectedEntity}
@@ -920,6 +937,8 @@
                   rowAccess={currentProfile?.rowAccess ?? 'off'}
                   epoch={profileEpoch}
                   ondraft={addDraft}
+                  expanded={detailShown}
+                  onexpand={(next) => (detailExpanded = next)}
                 />
               {:else}
                 <!-- The sentence is a paragraph so it is capped like every other one;
@@ -1245,9 +1264,11 @@
      the map and calls the Data tab incidental). At and above ~1000px the arithmetic
      is what binds and nothing changes; below it the map keeps 38% of the row.
 
-     None of this is the fix for the pane being narrow in the first place; the
-     width the editing surfaces actually need comes from collapsing the map for
-     the Data tab, which is a later step. */
+     None of this is the fix for the pane being narrow in the first place. That
+     is `.split.expanded` below: the width the editing surfaces actually need
+     comes from collapsing the map, which the Data tab now asks for. What
+     remains here is the docked case — the two side by side, for reading the
+     semantics of what the map has selected. */
   .split {
     display: grid;
     --detail-w: min(calc((100vw - 3rem - 0.7rem) / 2.6), calc((100% - 0.7rem) * 0.62));
@@ -1256,6 +1277,20 @@
     gap: 0.7rem;
     flex: 1;
     min-height: 460px;
+  }
+  /* The width the editing surfaces need, which the arithmetic above cannot give
+     them: one column, and the map out of the flow.
+     `display: none` rather than unmounting the map. The map holds a laid-out
+     graph and, once the operator has panned or zoomed, a viewport it decided to
+     keep (see `userAdjusted` in SemanticMap) — remounting would throw both away
+     on every trip to the Data tab. Hidden, its measured size goes to zero, and
+     the two effects that would re-fit from that both return early on a zero
+     dimension, so what comes back is what was left. */
+  .split.expanded {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .split.expanded > :global(.map-wrap) {
+    display: none;
   }
   .placeholder {
     border: 1px dashed #ccc;

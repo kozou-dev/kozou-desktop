@@ -46,6 +46,13 @@ the rail switches to a card per database side by side, which is where annotation
 coverage is comparable across them. The search box above spans every database
 that has been introspected, whichever of the two you are looking at.
 
+The map and the detail pane share the workspace, except when they cannot
+usefully: opening the **Data** tab collapses the map and gives the pane the
+whole width, because a row grid in a side column is mostly horizontal scrolling.
+**full width** / **show map** in the tab row switches that by hand on any tab —
+so getting back to the map after browsing is one click, and reading semantics
+wide is available without going through Data.
+
 Connect with a **least-privilege role**. On Supabase, do **not** use
 `service_role`/`postgres` (they bypass row-level security). A read-only role is
 enough for everything this build does: it introspects inside a `READ ONLY`
