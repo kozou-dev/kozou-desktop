@@ -1,16 +1,19 @@
 // Local-MCP port and capability-path allocation.
 //
-// Ports are sticky while a profile keeps naming the same connection: assigned
-// once from 3335 upward, persisted, and never silently renumbered. A transient
+// Ports are sticky while a profile keeps naming the same DATABASE: assigned once
+// from 3335 upward, persisted, and never silently renumbered. A transient
 // EADDRINUSE must NOT renumber — the persisted port is referenced by AI-client
 // configs the user has already pasted, and renumbering would invalidate them
 // without updating those files. Two things move a port, and they differ in
 // what survives. An explicit user reassignment changes the port and KEEPS the
 // rest (path, autoStart, bridge id), so a pasted bridge entry — which resolves
-// the port at run time — keeps working across it. An edit that changes the
-// profile's connection identity (its database, its schema set, or whether a
-// password is stored — see profileStore.upsert) discards the allocation whole,
-// and there invalidating those configs is exactly what is wanted. 3334 is
+// the port at run time — keeps working across it. An edit that points the profile
+// at another database (dbIdentityKey: host, port, database — see
+// profileStore.upsert) discards the allocation whole, and there invalidating
+// those configs is exactly what is wanted. An edit that keeps the database but
+// changes what it is reached with — the schema list, the stored password, the
+// role — keeps the allocation; widening the schema list additionally clears
+// autoStart, so the wider set is served only after a deliberate start. 3334 is
 // skipped on purpose: it is the kozou CLI's default HTTP port, and a manually
 // run `kozou mcp --http` would collide.
 

@@ -15,6 +15,7 @@ import type {
   RowAccess,
 } from '../shared/types.js';
 import { BRIDGE_ID_RE } from '../shared/mcpLocator.js';
+import { dbIdentityKey } from '../shared/dbIdentity.js';
 import { joinDbUrl, splitDbUrl } from '../shared/url.js';
 import { generateBridgeId, generateMcpPath, nextFreePort } from './mcpAllocation.js';
 
@@ -268,38 +269,70 @@ export class ProfileStore {
     // every label edit would be poor behaviour. The remote declaration follows
     // the input when present ({ declared: false } clears) and is preserved when
     // the input omits it.
-    // Two things are anchored to the connection the user last saw, and for the
-    // same reason. The row-access grant: the dialog named a database, so an
-    // edit that repoints the profile at a different one — or at different
-    // schemas, or at a different credential state — must ask again rather than
-    // carry the grant over to a record the user never saw. And the local-MCP
-    // allocation, which is what an AI client's config points at: keeping it
-    // across a repoint means a pasted entry silently answers for another
-    // database, under the same name, with nothing on either side to notice.
-    // That is precisely the failure the locator design rejected an earlier
-    // option for; it covered delete-then-recreate and not edit-in-place, and
-    // the allocation sat outside this rule until it did.
+    // Two things are anchored to the connection the user last saw, and they are
+    // anchored to DIFFERENT parts of it, because they answer different questions.
+    //
+    // The row-access grant is an authorization: the dialog named a database, and
+    // it named it with a schema list and a credential state. Widen the schemas
+    // and the same grant reaches rows nobody approved; change which credentials
+    // it is exercised with and it is a different act. So the grant is anchored to
+    // all three (rowAccessIdentity).
+    //
+    // The local-MCP allocation is a destination: a port, a capability path and a
+    // locator id, which is what an AI client's pasted config points AT. The
+    // failure it exists to prevent is a pasted entry silently answering for
+    // another database under the same name — and only the database can do that.
+    // Adding a schema does not repoint anything; neither does storing or
+    // dropping a password. Anchoring the allocation to those as well cost a
+    // repaste for an edit that moved nothing, and it cost it on a path this app
+    // itself instructs: the pane's own words for an out-of-schema relation are
+    // "Add its schema to the profile to inspect it".
+    //
+    // So the allocation is anchored to the database, using `dbIdentityKey` — the
+    // definition this codebase already owns and already uses for the duplicate
+    // warning, which means there is one answer to "is this the same database?"
+    // rather than two that disagree. The username is not part of it, which is a
+    // consequence worth naming: switching role keeps the allocation, on the
+    // grounds that it is the same database reached another way, and the grant
+    // (which does watch the URL) is what re-asks.
     //
     // Stickiness is not violated by this. A port stays fixed so that a config
     // the user has already pasted keeps working — for THIS database. Once the
     // profile names another one, invalidating that config is the point: the
     // fresh capability path 404s a pasted URL, and the fresh locator id makes
     // the bridge fail explicitly instead of relaying somewhere new. Label,
-    // colour and timeout edits change neither.
+    // colour, schema and timeout edits change neither.
     //
     // Ordering is what makes the discard safe: main stops a running server
     // before the store is written, and stopping withdraws that profile's
-    // locator — so the file is gone before the allocation naming it is. That
-    // holds because main's stop condition compares the URL WITH the password
-    // joined in, which every change this identity notices also changes. It is
-    // an invariant across two modules and nothing enforces it, so note the one
-    // shape that breaks it: a profiles.json whose `url` field carries a
-    // password (this app never writes one, but a hand-edited file can). Saving
-    // that URL unchanged looks identical to main while flipping hasPassword
-    // here, discarding the allocation under a still-running server and leaving
-    // its locator until the next launch sweeps it. A stale locator can only
-    // make the bridge fail or reach the server it already named, never a new
-    // one — so this is a leak of a file, not of a destination.
+    // locator — so the file is gone before the allocation naming it is. The
+    // invariant needed is "allocation discarded implies main stopped". It holds
+    // because discarding requires the identity keys to differ AND the normalized
+    // strings to differ, and normalization is a function: equal raw strings give
+    // equal normalized ones, so a discard implies the raw strings differ, and
+    // main compares raw strings (with the password joined in, plus the schema
+    // list). The other direction — main stops while the allocation survives — is
+    // reachable (drop an explicit `:5432`, or reorder the schema list, and main's
+    // string compare fires while this one does not) and is harmless: same
+    // database, server restored on the next launch.
+    //
+    // NOT claimed: that main's own read fails on an unparseable stored URL.
+    // `joinDbUrl` returns early when no password is stored and never parses, so
+    // the catch there does not run; main stops on the string compare instead. An
+    // earlier version of this comment asserted the parse, and it was wrong.
+    //
+    // The motive here is ergonomic, not safety: a repaste charged for an edit
+    // that moved nothing. The safety story is "no worse", with one hole closed
+    // and one narrower one left. Closed: a profiles.json whose `url` field
+    // carried a password by hand (this app never writes one) looked identical to
+    // main — no stop — while flipping hasPassword here, so the allocation went
+    // out from under a running server and left its locator until the next launch
+    // swept it; both sides now compare equal on that save. Left: if that
+    // hand-written password also holds a broken percent-escape, `splitDbUrl`
+    // throws here while `joinDbUrl` replaces the password, so main can still see
+    // no change while this discards. The cost either way is an orphaned locator
+    // file, which can only fail a bridge or reach the server it already named —
+    // a leak of a file, not of a destination.
     const storedRowAccess = sanitizeRowAccess(existing?.rowAccess);
     const connectionUnchanged =
       existing !== undefined &&
@@ -313,8 +346,47 @@ export class ProfileStore {
           schemas: input.schemas,
           hasPassword: encryptedPassword !== undefined,
         });
+    /** Whether the profile still names the database its allocation was handed out
+     *  for. `dbIdentityKey` is this codebase's own answer to "is this the same
+     *  database?" — (host, port, database), with the username and the schema list
+     *  deliberately out of it — so the allocation uses that rather than a second,
+     *  finer notion of its own. A raw string compare would call `:5432` and the
+     *  default port, `postgres://` and `postgresql://`, `localhost` and
+     *  `127.0.0.1` different databases, and there is no edit form in this app: a
+     *  schema change means retyping the whole URL, so every one of those spellings
+     *  would be a repaste charged for nothing.
+     *
+     *  It answers null for URL forms it declines to model (a query string that can
+     *  redirect the connection, an unparseable string). Two nulls are NOT equal
+     *  here — an unmodellable URL is not evidence of sameness — so those fall
+     *  through to the normalized string, which keeps a byte-identical re-save from
+     *  being read as a repoint while still discarding on any real edit. */
+    const sameDatabase = ((): boolean => {
+      if (existing === undefined) return false;
+      const storedKey = dbIdentityKey(existing.url);
+      if (storedKey !== null && storedKey === dbIdentityKey(sansPassword)) return true;
+      try {
+        return splitDbUrl(existing.url).sansPassword === sansPassword;
+      } catch {
+        return false;
+      }
+    })();
+    /** Whether this edit adds a schema the profile did not have. Widening is the
+     *  one schema edit that changes what a server would serve to a config already
+     *  pasted into somebody's AI client, so it keeps the destination and drops the
+     *  intent: the operator's next explicit start is what authorizes the wider set.
+     *  Narrowing and reordering are neither. */
+    const widensSchemas = ((): boolean => {
+      const before = new Set(existing?.schemas ?? []);
+      return input.schemas.some((schema) => !before.has(schema));
+    })();
     const preservedRowAccess = connectionUnchanged ? storedRowAccess : undefined;
-    const preservedLocalMcp = connectionUnchanged ? sanitizeLocalMcp(existing?.localMcp) : undefined;
+    const preservedLocalMcp = ((): LocalMcpAllocation | undefined => {
+      if (!sameDatabase) return undefined;
+      const kept = sanitizeLocalMcp(existing?.localMcp);
+      if (kept === undefined) return undefined;
+      return widensSchemas ? { ...kept, autoStart: false } : kept;
+    })();
     const remoteMcp: RemoteMcpDeclaration | undefined =
       input.remoteMcp === undefined
         ? existing?.remoteMcp
