@@ -30,6 +30,7 @@
     "src/renderer/src/lib/commentEmit.ts",
     "src/renderer/src/lib/aiViewBlocks.ts",
     "src/renderer/src/lib/statusCopy.ts",
+    "src/renderer/src/lib/expansion.ts",
     "test/**/*.ts",
     "e2e/**/*.ts"
   ]

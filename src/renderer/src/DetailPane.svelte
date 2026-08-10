@@ -16,6 +16,8 @@
     rowAccess,
     epoch,
     ondraft,
+    expanded,
+    onexpand,
   }: {
     context: ContextView;
     aiViews: AiViews;
@@ -24,6 +26,14 @@
     /** Hand a generated statement to the app's session draft list. The pane
      *  never applies one: emitting is the whole of what this does. */
     ondraft: (target: string, sql: string) => void;
+    /** Whether the app is currently giving this pane the whole workspace (the
+     *  map is collapsed). Owned by the app, not here: the map is its sibling,
+     *  and a pane cannot decide what happens to something beside it. */
+    expanded: boolean;
+    /** Ask for that to change. Called with `true` on opening the Data tab —
+     *  a row grid inside a ~40% column is what the layout work started from —
+     *  and with either value from the control in the tab row. */
+    onexpand: (next: boolean) => void;
     /** This profile's row-data grant. 'off' hides the Data tab entirely: with
      *  no grant, main refuses every `data:*` call, so offering the tab would
      *  only promise something the gate would then deny. */
@@ -186,10 +196,35 @@
       <button class:active={activeTab === 'ai'} onclick={() => (tab = 'ai')} data-testid="tab-ai">AI view</button>
       <button class:active={activeTab === 'raw'} onclick={() => (tab = 'raw')}>Raw</button>
       {#if canBrowse}
-        <button class:active={activeTab === 'data'} onclick={() => (tab = 'data')} data-testid="tab-data"
-          >Data</button
+        <!-- Opening Data asks for the width; it does not take it back on the way
+             out. Leaving the tab is not a request to restore the map — the
+             operator may have gone to Semantics precisely to read it wide — and
+             the control below sits in this row, which is rendered for every
+             relation the pane resolved. The app collapses the map only for those
+             (see `detailShown`), so wherever the map is hidden, this row is up. -->
+        <button
+          class:active={activeTab === 'data'}
+          onclick={() => {
+            tab = 'data';
+            onexpand(true);
+          }}
+          data-testid="tab-data">Data</button
         >
       {/if}
+      <!-- Not a toggle button, deliberately: no `aria-pressed`. The label names
+           what pressing it does, not which state is current, and the two cannot
+           both be true of one accessible name — "show map" carrying pressed=true
+           tells a screen reader the map is shown at the one moment it is not. Of
+           the two ways out, this is the one that keeps the label, because the
+           label is the way back to the map and being able to read it is the point. -->
+      <button
+        class="expand"
+        data-testid="detail-expand"
+        data-expanded={expanded}
+        onclick={() => onexpand(!expanded)}
+        title={expanded ? 'Show the map beside this pane' : 'Give this pane the whole workspace'}
+        >{expanded ? 'show map' : 'full width'}</button
+      >
     </nav>
 
     {#if activeTab === 'human'}
@@ -421,6 +456,17 @@
   .tabs button.active {
     background: #eef3ff;
     border-color: #2f6fed;
+  }
+  /* Pushed to the far end: it acts on the workspace, not on which tab is
+     showing, and sitting in the run of tabs read as a fifth one. */
+  .tabs .expand {
+    margin-left: auto;
+    color: #555;
+  }
+  .tabs .expand[data-expanded='true'] {
+    background: #eef3ff;
+    border-color: #2f6fed;
+    color: inherit;
   }
   pre {
     white-space: pre-wrap;

@@ -114,6 +114,18 @@ async function launchWithProfile(name: string): Promise<{ app: ElectronApplicati
   return { app, page };
 }
 
+
+/** Select another relation on the map. Opening the Data tab collapses the map
+ *  to give the grid the workspace, so getting back to the map is a deliberate
+ *  step — the same one an operator takes, via the control in the tab row. */
+async function selectOnMap(page: Page, qualifiedName: string): Promise<void> {
+  const toggle = page.getByTestId('detail-expand');
+  if ((await toggle.count()) > 0 && (await toggle.getAttribute('data-expanded')) === 'true') {
+    await toggle.click();
+  }
+  await page.getByTestId(`map-node-${qualifiedName}`).click({ timeout: 30_000 });
+}
+
 test('row editing: a grant of its own, a real round trip, and controlled refusals', async () => {
   const { app, page } = await launchWithProfile('edit');
   const badge = page.getByTestId('rowaccess-badge-edit');
@@ -124,7 +136,7 @@ test('row editing: a grant of its own, a real round trip, and controlled refusal
     await expect(badge).toHaveText('rows: browsing');
     await expect.poll(() => prompts(app)).toBe(1);
 
-    await page.getByTestId('map-node-public.customers').click({ timeout: 30_000 });
+    await selectOnMap(page, 'public.customers');
     await expect(page.getByTestId('detail-pane')).toContainText('public.customers');
     await page.getByTestId('tab-data').click();
     await expect(page.getByTestId('data-grid')).toBeVisible({ timeout: 30_000 });
@@ -237,7 +249,7 @@ test('row editing: a grant of its own, a real round trip, and controlled refusal
     expect(gone.rows[0]!.n).toBe(0);
 
     // --- a view offers no write UI -------------------------------------------
-    await page.getByTestId('map-node-public.recent_orders').click();
+    await selectOnMap(page, 'public.recent_orders');
     await expect(page.getByTestId('detail-pane')).toContainText('public.recent_orders');
     await page.getByTestId('tab-data').click();
     await expect(page.getByTestId('data-panel')).toBeVisible();
@@ -249,7 +261,7 @@ test('row editing: a grant of its own, a real round trip, and controlled refusal
     // is on screen is then the beginning of a key, which can be another row's
     // key in full - so this row offers no controls at all, while the table
     // itself still accepts a new row.
-    await page.getByTestId('map-node-public.long_key').click();
+    await selectOnMap(page, 'public.long_key');
     await expect(page.getByTestId('detail-pane')).toContainText('public.long_key');
     await page.getByTestId('tab-data').click();
     await expect(page.getByTestId('data-truncated')).toBeVisible();
@@ -259,7 +271,7 @@ test('row editing: a grant of its own, a real round trip, and controlled refusal
     await expect(page.getByTestId('data-new')).toBeVisible();
 
     // --- neither does a table with no primary key ----------------------------
-    await page.getByTestId('map-node-public.audit_log').click();
+    await selectOnMap(page, 'public.audit_log');
     await expect(page.getByTestId('detail-pane')).toContainText('public.audit_log');
     await page.getByTestId('tab-data').click();
     await expect(page.getByTestId('data-no-keyset')).toBeVisible();
@@ -270,7 +282,7 @@ test('row editing: a grant of its own, a real round trip, and controlled refusal
     await expect(page.getByTestId('row-edit-0')).toHaveCount(0);
 
     // --- revoking takes the editor away --------------------------------------
-    await page.getByTestId('map-node-public.customers').click();
+    await selectOnMap(page, 'public.customers');
     await page.getByTestId('tab-data').click();
     await expect(page.getByTestId('data-new')).toBeVisible();
     await page.getByTestId('rowaccess-off-edit').click();
