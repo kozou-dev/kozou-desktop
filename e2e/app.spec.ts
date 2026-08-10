@@ -192,6 +192,17 @@ test('two profiles: map, detail pane, and AI view end-to-end', async () => {
     await expect(row).toBeVisible();
     await expect(body).toHaveCount(0);
     const paneHeight = await height(page.locator('.split'));
+    // What the window could not pay for in the first place. The pane row keeps its
+    // 460px floor whatever the window does, so once the region above the workspace
+    // plus that floor exceeds the window, .workspace overflows its own height and
+    // the page scrolls - the degradation the floor's own comment documents as
+    // accepted. Measured HERE, while the row is shut, for two reasons: it is the
+    // shut state's shortfall that the open body does not inherit (the body's floor
+    // is 8rem, not 460px), and a break in the open state therefore cannot inflate
+    // this allowance to let itself pass.
+    const unpaid = await page
+      .locator('.workspace')
+      .evaluate((el) => el.scrollHeight - el.clientHeight);
 
     // Open, and it takes the workspace rather than divide it - the same switch the
     // Data tab makes. The row stays up, because it is the only way back.
@@ -200,14 +211,35 @@ test('two profiles: map, detail pane, and AI view end-to-end', async () => {
     await expect(map).toBeHidden();
     await expect(row).toBeVisible();
     await expect(page.getByTestId('bottom-enums')).toHaveAttribute('data-open', 'true');
-    // The body gets the room the pane row gave up. Stated as a height and not as
-    // "the body is visible", because the pane row's 460px floor is the thing that
-    // has to go with it: hide the row without releasing its floor and this body is
-    // a scroll box with a sliver of visible area - measured at 7px of 477 - which
-    // `toBeVisible()` and a page-overflow check both accept, since the workspace
-    // absorbs it by squeezing rather than by spilling. That is the shape of defect
-    // the rail's own floor comment was written about.
-    expect(await height(body)).toBeGreaterThanOrEqual(paneHeight - 4);
+    // The body gets the room the pane row gave up, less what the window never had.
+    // Stated as a height and not as "the body is visible", because the pane row's
+    // 460px floor is the thing that has to go with it: hide the row without
+    // releasing its floor and this body is a scroll box with a sliver of visible
+    // area - measured at 7px of 477 before the body had a floor of its own, and at
+    // 128px, which is that 8rem floor, once it did - which `toBeVisible()` and a
+    // page-overflow check both accept, since the workspace absorbs it by squeezing
+    // rather than by spilling. That is the shape of defect the rail's own floor
+    // comment was written about.
+    //
+    // `- unpaid` is not slack, it is the rest of the same sentence. Written as
+    // `paneHeight - 4` this went red on the macOS CI runner, whose screen is shorter
+    // than the 840px window this app asks for: the pane row was pinned to its 460px
+    // floor and the body came out at 309px. Measured at seven window heights,
+    // `paneHeight - unpaid` is not an approximation of the body but exactly it - 0px
+    // of slack at 812, 772, 740, 712, 672, 612 and 532px of viewport - while
+    // `paneHeight - 4` alone holds at 812px and nowhere below it. Driving this test
+    // at a 676px window (648 of viewport) reproduces the runner exactly, body and
+    // all: 309px, where the old form demanded 456. A guard that goes red in a state
+    // the design allows is a guard that will be deleted rather than believed, which
+    // is the rule this file states 100 lines up about the map pane; this one had
+    // broken it.
+    //
+    // Broken four ways to check it still means something: the floor left in place
+    // at the default window (469 wanted, 128 given, since the body falls to its own
+    // 8rem), the floor left in place at 676 (305 wanted, 128 given), the old form
+    // at 676 (456 wanted, 309 given - the CI failure, locally), and the fixed form
+    // at 676, which is the one that has to pass.
+    expect(await height(body)).toBeGreaterThanOrEqual(paneHeight - unpaid - 4);
 
     await page.getByTestId('bottom-enums').click();
     await expect(map).toBeVisible();
