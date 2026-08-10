@@ -19,6 +19,7 @@
   import SemanticMap from './SemanticMap.svelte';
   import { buildMcpClientSnippets } from '../../shared/mcpSnippet';
   import type { CommentDraft } from './lib/commentEmit';
+  import { expansionApplies } from './lib/expansion';
   import {
     MCP_ALLOW_LABEL,
     MCP_ALLOW_NOTE,
@@ -116,10 +117,10 @@
    *  map. Set by opening the Data tab and by the control in the tab row.
    *
    *  Lives here rather than in the pane because the map is the pane's sibling:
-   *  what gets collapsed is not the pane's to decide. It also has to outlive the
-   *  pane — selecting another relation remounts it, and losing the width on
-   *  every click would make the mode useless for the thing it exists for
-   *  (comparing rows across relations). */
+   *  what gets collapsed is not the pane's to decide. It also has to outlive
+   *  every state in which the pane shows no tab row — the intent is the
+   *  operator's, not a property of what happens to be selected, so deselecting
+   *  or landing on something unresolvable must not spend it. */
   let detailExpanded = $state(false);
   /** Where the bridge lives — a property of the installation, not of a profile,
    *  so it is asked for once and kept. Null until it has arrived, or after a
@@ -496,13 +497,23 @@
           mcp[shownSnippetFor]?.bridgeId !== undefined,
         ),
   );
-  /** The expansion as it actually applies: only ever while a relation is
-   *  selected, since that is the only time the detail pane holds anything. The
-   *  intent survives in `detailExpanded` while nothing is selected, so going
-   *  back to a relation returns to the width the operator last chose. */
-  const detailShown = $derived(detailExpanded && selectedEntity !== null && selectedProfile !== null);
   const current = $derived(selectedProfile ? (results[selectedProfile] ?? null) : null);
   const currentContext = $derived(current?.ok ? (current.context as ContextView) : null);
+  /** The expansion as it actually applies. Gated on the selection resolving, not
+   *  merely on something being selected: the pane renders its tab row only for a
+   *  relation it found, and the control that puts the map back lives in that row.
+   *  Collapsing the map for a ghost or a stale selection would therefore hide the
+   *  map and take away the only way to bring it back, leaving a workspace holding
+   *  one explanatory sentence and no exit. The rule is in `lib/expansion` so that
+   *  invariant is a test's to hold, not a reader's. */
+  const detailShown = $derived(
+    expansionApplies({
+      expanded: detailExpanded,
+      profile: selectedProfile,
+      context: currentContext,
+      selected: selectedEntity,
+    }),
+  );
 
   // Successfully-inspected contexts, for cross-profile search.
   const searchable = $derived.by(() => {
@@ -919,9 +930,11 @@
                 current.stats.aiViewsBytes / 1024
               ).toFixed(1)}KiB AI views
             </p>
-            <!-- `detailShown`, not `detailExpanded`: with nothing selected the
-                 pane beside the map is a placeholder, and collapsing the map to
-                 make room for it would leave the workspace showing neither. -->
+            <!-- `detailShown`, not `detailExpanded`: the map is collapsed only
+                 for a relation the pane actually found. With nothing selected the
+                 pane is a placeholder, and with a ghost or a stale selection it is
+                 one sentence with no tab row — collapsing the map for either would
+                 leave the workspace showing neither the map nor a way back to it. -->
             <div class="split" class:expanded={detailShown}>
               <SemanticMap
                 context={currentContext}
@@ -1285,7 +1298,15 @@
      keep (see `userAdjusted` in SemanticMap) — remounting would throw both away
      on every trip to the Data tab. Hidden, its measured size goes to zero, and
      the two effects that would re-fit from that both return early on a zero
-     dimension, so what comes back is what was left. */
+     dimension, so nothing is recomputed while it is away.
+     What comes back is then what was left, for as long as the map's own policies
+     say the view still applies — and those are unchanged here, not something this
+     adds. Two of them can still decide otherwise: a map the operator never
+     touched re-fits when shown at a size it was not fitted for (collapse, resize
+     the window, show), and a new graph resets the view deliberately, collapsed or
+     not. What the `display: none` buys is the case in between, which is the
+     common one: a panned or zoomed view of the same graph, kept across every trip
+     to the Data tab. */
   .split.expanded {
     grid-template-columns: minmax(0, 1fr);
   }

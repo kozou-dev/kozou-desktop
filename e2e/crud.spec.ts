@@ -120,7 +120,7 @@ async function launchWithProfile(name: string): Promise<{ app: ElectronApplicati
  *  step — the same one an operator takes, via the control in the tab row. */
 async function selectOnMap(page: Page, qualifiedName: string): Promise<void> {
   const toggle = page.getByTestId('detail-expand');
-  if ((await toggle.count()) > 0 && (await toggle.getAttribute('aria-pressed')) === 'true') {
+  if ((await toggle.count()) > 0 && (await toggle.getAttribute('data-expanded')) === 'true') {
     await toggle.click();
   }
   await page.getByTestId(`map-node-${qualifiedName}`).click({ timeout: 30_000 });

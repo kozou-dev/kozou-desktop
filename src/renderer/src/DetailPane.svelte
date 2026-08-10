@@ -199,7 +199,9 @@
         <!-- Opening Data asks for the width; it does not take it back on the way
              out. Leaving the tab is not a request to restore the map — the
              operator may have gone to Semantics precisely to read it wide — and
-             the control below is always there to put the map back. -->
+             the control below sits in this row, which is rendered for every
+             relation the pane resolved. The app collapses the map only for those
+             (see `detailShown`), so wherever the map is hidden, this row is up. -->
         <button
           class:active={activeTab === 'data'}
           onclick={() => {
@@ -209,10 +211,16 @@
           data-testid="tab-data">Data</button
         >
       {/if}
+      <!-- Not a toggle button, deliberately: no `aria-pressed`. The label names
+           what pressing it does, not which state is current, and the two cannot
+           both be true of one accessible name — "show map" carrying pressed=true
+           tells a screen reader the map is shown at the one moment it is not. Of
+           the two ways out, this is the one that keeps the label, because the
+           label is the way back to the map and being able to read it is the point. -->
       <button
         class="expand"
         data-testid="detail-expand"
-        aria-pressed={expanded}
+        data-expanded={expanded}
         onclick={() => onexpand(!expanded)}
         title={expanded ? 'Show the map beside this pane' : 'Give this pane the whole workspace'}
         >{expanded ? 'show map' : 'full width'}</button
@@ -455,7 +463,7 @@
     margin-left: auto;
     color: #555;
   }
-  .tabs .expand[aria-pressed='true'] {
+  .tabs .expand[data-expanded='true'] {
     background: #eef3ff;
     border-color: #2f6fed;
     color: inherit;

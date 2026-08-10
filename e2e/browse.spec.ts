@@ -138,7 +138,7 @@ async function launchWithProfile(
  *  step — the same one an operator takes, via the control in the tab row. */
 async function selectOnMap(page: Page, qualifiedName: string): Promise<void> {
   const toggle = page.getByTestId('detail-expand');
-  if ((await toggle.count()) > 0 && (await toggle.getAttribute('aria-pressed')) === 'true') {
+  if ((await toggle.count()) > 0 && (await toggle.getAttribute('data-expanded')) === 'true') {
     await toggle.click();
   }
   await page.getByTestId(`map-node-${qualifiedName}`).click({ timeout: 30_000 });
@@ -199,11 +199,11 @@ test('data tab: gated by the grant, browses rows, and pages by cursor', async ()
     const map = page.getByTestId('semantic-map');
     const expand = page.getByTestId('detail-expand');
     await expect(map).toBeVisible();
-    await expect(expand).toHaveAttribute('aria-pressed', 'false');
+    await expect(expand).toHaveAttribute('data-expanded', 'false');
 
     await page.getByTestId('tab-data').click();
     await expect(map).toBeHidden();
-    await expect(expand).toHaveAttribute('aria-pressed', 'true');
+    await expect(expand).toHaveAttribute('data-expanded', 'true');
 
     // The control puts it back, and the pane stays on Data while it does: the
     // two are separate questions (which tab, how wide).
