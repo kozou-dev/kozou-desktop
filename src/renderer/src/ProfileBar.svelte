@@ -87,10 +87,14 @@
       >
     </span>
   </div>
+  <!-- `asButton`: nothing here is an interactive host (the bar's own `delete` has
+       been a real button since this component existed), so the grant can be one
+       too and take Enter and Space from the browser. -->
   <RowAccessBlock
     profile={profile.name}
     level={profile.rowAccess}
     pending={rowAccessPending === profile.name}
+    asButton
     {onrowaccess}
   />
   <McpBlock

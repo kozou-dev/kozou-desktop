@@ -120,6 +120,9 @@
           onkeydown={(e) => e.key === 'Enter' && (e.stopPropagation(), ondelete(p.name))}>delete</span
         >
       </div>
+      <!-- No `asButton`: the card is itself a <button> that selects the profile, so
+           the controls in here stay spans. That is also the default, so a host that
+           says nothing cannot get this wrong. -->
       <RowAccessBlock
         profile={p.name}
         level={p.rowAccess}

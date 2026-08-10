@@ -26,6 +26,15 @@ function toolText(payload: unknown): string {
 
 test.skip(!url, 'KOZOU_TEST_DATABASE_URL not set');
 
+/** Read through `getPropertyValue` rather than a camelCase field, and typed as
+ *  the one method that is called. Both because this suite typechecks under the
+ *  node tsconfig, which has no DOM globals - and because a hand-written record of
+ *  camelCase fields makes the type authoritative over the real API: a misspelled
+ *  or renamed field then reads `undefined`, and `undefined !== '0px'` is true, so
+ *  the assertion passes forever. `getPropertyValue` answers '' for a property it
+ *  does not know, which fails these comparisons instead of passing them. */
+type StyleReader = { getPropertyValue: (property: string) => string };
+
 test('two profiles: map, detail pane, and AI view end-to-end', async () => {
   const userData = mkdtempSync(join(tmpdir(), 'kozou-desktop-e2e-'));
   const app = await electron.launch({
@@ -182,12 +191,68 @@ test('two profiles: map, detail pane, and AI view end-to-end', async () => {
   await expect(page.getByTestId('overview-cards')).toHaveCount(0);
   await expect(page.getByTestId('rowaccess-badge-beta')).toHaveCount(1);
 
+  // The way to grant row access is a control, and on this surface it is a real
+  // one. Two attempts at the discoverability of this thing changed only the
+  // wording; it was a bare run of blue words beside a bordered status badge, with
+  // no border, background or padding of its own. Asserted as the box it now draws
+  // rather than as a class name, because a class says nothing about what is on
+  // screen.
+  const grant = page.getByTestId('rowaccess-enable-beta');
+  const box = async (loc: typeof grant): Promise<{ tag: string; h: number; w: number; border: string; bg: string }> =>
+    loc.evaluate((el) => {
+      const s = (globalThis as unknown as { getComputedStyle: (e: unknown) => StyleReader })
+        .getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      return {
+        tag: el.tagName,
+        h: Math.round(r.height),
+        w: Math.round(r.width),
+        border: s.getPropertyValue('border-top-color'),
+        bg: s.getPropertyValue('background-color'),
+      };
+    });
+  const barGrant = await box(grant);
+  // A real <button> here, so Enter and Space work without this app reimplementing
+  // them. The card cannot have one (it is itself a <button>) and keeps the span.
+  expect(barGrant.tag).toBe('BUTTON');
+  // The box, not "has some border and some background": a bare <button> with this
+  // app's rule deleted still carries Chromium's own 2px border, #efefef fill and
+  // 6px padding, so three inequalities on those pass while the control is back to
+  // a run of text. Measured here: 109x22 against the 92x14 it replaced, and the
+  // app's own blue rather than the platform's grey.
+  expect(barGrant.h).toBeGreaterThanOrEqual(20);
+  expect(barGrant.w).toBeGreaterThanOrEqual(100);
+  expect(barGrant.border).toBe('rgb(47, 111, 237)');
+  expect(barGrant.bg).toBe('rgb(238, 243, 255)');
+
   // F1: the all-databases view puts every profile side by side, which is what
   // makes coverage comparable; the cards carry counts and annotation coverage.
   await page.getByTestId('rail-all').click();
   await expect(page.getByTestId('overview-cards')).toBeVisible();
   await expect(page.getByTestId('profile-bar')).toHaveCount(0);
   await expect(page.getByTestId('rowaccess-badge-beta')).toHaveCount(1);
+
+  // On the card it is a span carrying role=button, and it has to stay one: nesting
+  // a <button> in the card's own <button> is invalid HTML, and the browser's repair
+  // for it is to close the outer element early - which would take the rest of the
+  // card out of the button that selects the profile. Same presentation either way.
+  const cardSpan = page.getByTestId('rowaccess-enable-beta');
+  const cardGrant = await box(cardSpan);
+  const cardRole = await cardSpan.evaluate((el) => ({
+    role: el.getAttribute('role'),
+    focusable: el.getAttribute('tabindex'),
+  }));
+  expect(cardGrant.tag).toBe('SPAN');
+  expect(cardRole).toEqual({ role: 'button', focusable: '0' });
+  // Same presentation on both surfaces - measured against the bar's own numbers
+  // rather than restated, since "they match" is the property and two separate
+  // property sets would not notice them drifting apart.
+  expect({ h: cardGrant.h, w: cardGrant.w, border: cardGrant.border, bg: cardGrant.bg }).toEqual({
+    h: barGrant.h,
+    w: barGrant.w,
+    border: barGrant.border,
+    bg: barGrant.bg,
+  });
   await expect(page.getByTestId('card-alpha')).toContainText('tables');
   await expect(page.getByTestId('card-alpha')).toContainText('annotated');
 
