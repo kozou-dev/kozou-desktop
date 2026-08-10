@@ -180,6 +180,64 @@ test('two profiles: map, detail pane, and AI view end-to-end', async () => {
     // The fidelity boundary is stated on the surface that makes the claim.
     await expect(viewAi).toContainText('the text of one MCP tool result');
     await expect(viewAi).toContainText('not reproduced here yet');
+
+    // --- the bottom row: one row shut, the workspace when open ----------------
+    // What this replaced was three panels that each collapsed themselves, so all
+    // three shut cost the workspace three rows below the pane row the rest of this
+    // layout work spent its time giving a definite height to.
+    const row = page.getByTestId('bottom-row');
+    const body = page.getByTestId('bottom-body');
+    const height = async (loc: typeof row): Promise<number> =>
+      loc.evaluate((el) => Math.round(el.getBoundingClientRect().height));
+    await expect(row).toBeVisible();
+    await expect(body).toHaveCount(0);
+    const paneHeight = await height(page.locator('.split'));
+
+    // Open, and it takes the workspace rather than divide it - the same switch the
+    // Data tab makes. The row stays up, because it is the only way back.
+    await page.getByTestId('bottom-enums').click();
+    await expect(body).toBeVisible();
+    await expect(map).toBeHidden();
+    await expect(row).toBeVisible();
+    await expect(page.getByTestId('bottom-enums')).toHaveAttribute('data-open', 'true');
+    // The body gets the room the pane row gave up. Stated as a height and not as
+    // "the body is visible", because the pane row's 460px floor is the thing that
+    // has to go with it: hide the row without releasing its floor and this body is
+    // a scroll box with a sliver of visible area - measured at 7px of 477 - which
+    // `toBeVisible()` and a page-overflow check both accept, since the workspace
+    // absorbs it by squeezing rather than by spilling. That is the shape of defect
+    // the rail's own floor comment was written about.
+    expect(await height(body)).toBeGreaterThanOrEqual(paneHeight - 4);
+
+    await page.getByTestId('bottom-enums').click();
+    await expect(map).toBeVisible();
+    await expect(body).toHaveCount(0);
+
+    // --- folding the rail gives its width to the map -------------------------
+    // The claim is not that the rail disappears, it is where the 13rem goes. The
+    // detail column is stated against the viewport, so it does not move; the map
+    // takes the row's `1fr` and absorbs the lot. Measured rather than asserted by
+    // class, because "the rail is gone" would pass while the width went nowhere.
+    const mapWidth = async (): Promise<number> =>
+      map.evaluate((el) => Math.round(el.getBoundingClientRect().width));
+    const detailWidth = async (): Promise<number> =>
+      detail.evaluate((el) => Math.round(el.getBoundingClientRect().width));
+    const docked = { map: await mapWidth(), detail: await detailWidth() };
+
+    const railToggle = page.getByTestId('rail-toggle');
+    await railToggle.click();
+    await expect(page.getByTestId('profile-rail')).toHaveCount(0);
+    // The way back is out here, because folded the rail cannot carry it: a control
+    // that hides something cannot live inside what it hides.
+    await expect(railToggle).toBeVisible();
+    await expect(railToggle).toHaveAttribute('data-folded', 'true');
+    const folded = { map: await mapWidth(), detail: await detailWidth() };
+    expect(folded.map).toBeGreaterThan(docked.map);
+    expect(folded.detail).toBe(docked.detail);
+
+    await railToggle.click();
+    await expect(page.getByTestId('profile-rail')).toBeVisible();
+    expect(await mapWidth()).toBe(docked.map);
   }
 
   // Exactly one of the two views is mounted, and each states the row-access
@@ -262,6 +320,53 @@ test('two profiles: map, detail pane, and AI view end-to-end', async () => {
   await expect(results).toBeVisible();
   await results.getByRole('button').filter({ hasText: 'public.customers' }).first().click();
   await expect(page.getByTestId('detail-pane')).toContainText('public.customers');
+
+  // ...and the jump lands on it, rather than on whatever was open. A bottom panel
+  // has collapsed the pane the jump is for, and the panel is offered by every
+  // database this fixture describes, so it survived the change of database and the
+  // change of relation both - measured, the detail pane came back at 0px with an
+  // enum list on screen. Visibility, not text: `toContainText` reads a pane that
+  // `display: none` has taken off the screen just as happily.
+  await page.getByTestId('bottom-enums').click();
+  await expect(page.getByTestId('bottom-body')).toBeVisible();
+  await page.getByPlaceholder(/Search all databases/).fill('customers');
+  await expect(results).toBeVisible();
+  await results.getByRole('button').filter({ hasText: 'public.customers' }).first().click();
+  await expect(page.getByTestId('detail-pane')).toBeVisible();
+  await expect(page.getByTestId('bottom-body')).toHaveCount(0);
+
+  // Switching database from the rail does the same. The panel was the one piece of
+  // workspace state with no database in it.
+  await page.getByTestId('bottom-enums').click();
+  await expect(page.getByTestId('bottom-body')).toBeVisible();
+  await page.getByTestId('rail-beta').click();
+  await expect(page.getByTestId('semantic-map')).toBeVisible();
+  await expect(page.getByTestId('bottom-body')).toHaveCount(0);
+
+  // --- an open panel keeps a floor when the shell squeezes the workspace --------
+  // Releasing the pane row's 460px is what lets the body have the workspace, and it
+  // is also what leaves the body with nothing underneath it: a scroll container in a
+  // squeezed flex column has no floor of its own. Measured before the floor was
+  // added, at this window with Settings open: 0px of visible height against 34px of
+  // content, and the page not overflowing either, so no scroll anywhere reached the
+  // list. The floor trades that for a page scroll, which the pane row and the rail
+  // both already document as the accepted degradation.
+  await page.getByTestId('map-node-public.customers').click({ timeout: 30_000 });
+  await page.getByTestId('bottom-enums').click();
+  await app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]!.setSize(1280, 460);
+  });
+  await page.getByTestId('settings-toggle').click();
+  await expect(async () => {
+    const reach = await page.getByTestId('bottom-body').evaluate((el) => ({
+      client: el.clientHeight,
+      scroll: el.scrollHeight,
+    }));
+    // Every pixel of the list is reachable: the box is at least as tall as what is
+    // in it, and taller than nothing.
+    expect(reach.client).toBeGreaterThan(0);
+    expect(reach.client).toBeGreaterThanOrEqual(reach.scroll);
+  }).toPass({ timeout: 5000 });
 
   await app.close();
 });

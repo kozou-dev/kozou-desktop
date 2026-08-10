@@ -41,3 +41,21 @@ export function expansionApplies(args: {
     args.expanded && args.profile !== null && selectionResolves(args.context, args.selected)
   );
 }
+
+/** The panels that share the one row at the bottom of the workspace. Drafts are
+ *  a property of the session, the other two of the inspected context; all three
+ *  used to collapse themselves, which cost the workspace a row each while shut. */
+export type BottomPanel = 'drafts' | 'functions' | 'enums';
+
+/** Which bottom panel is actually open. Same shape of rule as `expansionApplies`,
+ *  and for the same reason: opening one collapses the map and the detail pane, so
+ *  the only way back is the row itself, and the row only offers a panel it has
+ *  something to show. A panel whose content went away while it was open - the
+ *  drafts cleared, another profile inspected - would otherwise leave a collapsed
+ *  workspace with an empty body and no button to close. */
+export function bottomPanelShown(
+  open: BottomPanel | null,
+  available: readonly BottomPanel[],
+): BottomPanel | null {
+  return open !== null && available.includes(open) ? open : null;
+}

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { ContextView } from '../src/shared/contextView.js';
-import { expansionApplies, selectionResolves } from '../src/renderer/src/lib/expansion.js';
+import {
+  bottomPanelShown,
+  expansionApplies,
+  selectionResolves,
+} from '../src/renderer/src/lib/expansion.js';
 
 /** A context holding one table and one view, and nothing else that matters here. */
 const context = {
@@ -61,5 +65,29 @@ describe('expansionApplies', () => {
     // explained it, and the map must not be collapsed for a pane showing neither.
     expect(applies({ context: null })).toBe(false);
     expect(applies({ profile: null })).toBe(false);
+  });
+});
+
+describe('bottomPanelShown', () => {
+  it('shows an open panel the row still offers', () => {
+    expect(bottomPanelShown('enums', ['functions', 'enums'])).toBe('enums');
+    expect(bottomPanelShown('drafts', ['drafts'])).toBe('drafts');
+  });
+
+  it('shows nothing when nothing is open', () => {
+    expect(bottomPanelShown(null, ['drafts', 'enums'])).toBe(null);
+  });
+
+  // The same invariant as `expansionApplies`, reached from the other side: an open
+  // panel collapses the pane row, so the row below it is the only way back. A panel
+  // the row no longer offers has no button, and its body has nothing in it - the
+  // workspace would hold an empty box and no way out.
+  it('shows nothing when what was open is no longer offered', () => {
+    // The drafts were cleared while their panel was open.
+    expect(bottomPanelShown('drafts', ['functions', 'enums'])).toBe(null);
+    // Another profile was inspected, and this one exposes no functions.
+    expect(bottomPanelShown('functions', ['enums'])).toBe(null);
+    // Nothing left to offer at all.
+    expect(bottomPanelShown('enums', [])).toBe(null);
   });
 });

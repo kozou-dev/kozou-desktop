@@ -4,20 +4,21 @@
   let { enums }: { enums: EnumView[] } = $props();
 </script>
 
-{#if enums.length > 0}
-  <details class="enums" data-testid="enums-panel">
-    <summary>Enum types ({enums.length})</summary>
-    <ul>
-      {#each enums as e (`${e.schema}.${e.name}`)}
-        <li>
-          <code>{e.schema}.{e.name}</code>
-          <span class="values">[{e.values.join(' | ')}]</span>
-          {#if e.description}<div class="desc">{e.description.split('\n', 1)[0]}</div>{/if}
-        </li>
-      {/each}
-    </ul>
-  </details>
-{/if}
+<!-- The body only. Whether this is showing, and the label that says so, belong to
+     the workspace's bottom row: three panels each collapsing itself cost three
+     rows of the workspace when all three were shut, which is what that row
+     exists to reduce to one. -->
+<div class="enums" data-testid="enums-panel">
+  <ul>
+    {#each enums as e (`${e.schema}.${e.name}`)}
+      <li>
+        <code>{e.schema}.{e.name}</code>
+        <span class="values">[{e.values.join(' | ')}]</span>
+        {#if e.description}<div class="desc">{e.description.split('\n', 1)[0]}</div>{/if}
+      </li>
+    {/each}
+  </ul>
+</div>
 
 <style>
   .enums {
@@ -27,12 +28,9 @@
     padding: 0.5rem 0.9rem;
     font-size: 0.82rem;
   }
-  summary {
-    cursor: pointer;
-    color: #444;
-  }
   ul {
     padding-left: 1.2rem;
+    margin: 0;
   }
   code {
     font-size: 0.78rem;

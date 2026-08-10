@@ -10,27 +10,26 @@
   const blocks = $derived(functionsAiBlocks(aiViews));
 </script>
 
-{#if functions.length > 0}
-  <details class="functions" data-testid="functions-panel">
-    <summary>Functions exposed as RPC actions ({functions.length})</summary>
-    <ul>
-      {#each functions as f (f.qualifiedName)}
-        <li>
-          <code>{f.qualifiedName}({f.args.map((a) => `${a.name} ${a.typeName}`).join(', ')})</code>
-          <span class="ret">-&gt; {f.returns.typeName}</span>
-          <span class="attrs">{f.volatility}, security {f.security}</span>
-          {#if f.description}<div class="desc">{f.description.split('\n', 1)[0]}</div>{/if}
-        </li>
-      {/each}
-    </ul>
-    {#if blocks.length > 0}
-      <button class="toggle" onclick={() => (showAi = !showAi)}>
-        {showAi ? 'Hide' : 'Show'} AI view (describe_functions)
-      </button>
-      {#if showAi}<AiView {blocks} testid="functions-ai-view" />{/if}
-    {/if}
-  </details>
-{/if}
+<!-- The body only; the label and whether it is showing belong to the workspace's
+     bottom row (see EnumsPanel for why). -->
+<div class="functions" data-testid="functions-panel">
+  <ul>
+    {#each functions as f (f.qualifiedName)}
+      <li>
+        <code>{f.qualifiedName}({f.args.map((a) => `${a.name} ${a.typeName}`).join(', ')})</code>
+        <span class="ret">-&gt; {f.returns.typeName}</span>
+        <span class="attrs">{f.volatility}, security {f.security}</span>
+        {#if f.description}<div class="desc">{f.description.split('\n', 1)[0]}</div>{/if}
+      </li>
+    {/each}
+  </ul>
+  {#if blocks.length > 0}
+    <button class="toggle" onclick={() => (showAi = !showAi)}>
+      {showAi ? 'Hide' : 'Show'} AI view (describe_functions)
+    </button>
+    {#if showAi}<AiView {blocks} testid="functions-ai-view" />{/if}
+  {/if}
+</div>
 
 <style>
   .functions {
@@ -40,12 +39,9 @@
     padding: 0.5rem 0.9rem;
     font-size: 0.82rem;
   }
-  summary {
-    cursor: pointer;
-    color: #444;
-  }
   ul {
     padding-left: 1.2rem;
+    margin: 0 0 0.4rem;
   }
   code {
     font-size: 0.78rem;

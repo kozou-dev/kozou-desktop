@@ -19,7 +19,7 @@
   import SemanticMap from './SemanticMap.svelte';
   import { buildMcpClientSnippets } from '../../shared/mcpSnippet';
   import type { CommentDraft } from './lib/commentEmit';
-  import { expansionApplies } from './lib/expansion';
+  import { type BottomPanel, bottomPanelShown, expansionApplies } from './lib/expansion';
   import {
     MCP_ALLOW_LABEL,
     MCP_ALLOW_NOTE,
@@ -122,6 +122,17 @@
    *  operator's, not a property of what happens to be selected, so deselecting
    *  or landing on something unresolvable must not spend it. */
   let detailExpanded = $state(false);
+  /** Which of the workspace's bottom panels the operator opened, if any. One at a
+   *  time: opening one collapses the map and the detail pane, the same switch
+   *  rather than share the row that the Data tab makes, and two open bodies would
+   *  divide what that switch just bought. Reset by closing it and by nothing else
+   *  — see `bottomShown` for what happens when its content goes away. */
+  let bottomOpen = $state<BottomPanel | null>(null);
+  /** Folded away by the operator. The rail says nothing but which databases exist,
+   *  and the selected one is named in the bar above the workspace, so between
+   *  switches it is 13rem of width spent on a list nobody is reading. Manual only:
+   *  what was asked for is a menu that stows, not a width that guesses. */
+  let railFolded = $state(false);
   /** Where the bridge lives — a property of the installation, not of a profile,
    *  so it is asked for once and kept. Null until it has arrived, or after a
    *  failed ask; `loadBridgeLauncher` re-asks when a config panel is opened. */
@@ -407,6 +418,11 @@
     if (selectedProfile === null) return;
     setDraftStatus(null);
     drafts = [...drafts, { id: (nextDraftId += 1), profile: selectedProfile, target, sql }];
+    // Emitting asks for the panel that holds what was emitted, the same way opening
+    // the Data tab asks for the width: a statement generated into a row the operator
+    // has to think to click is a statement they have no reason to believe exists.
+    // Not restored on the way out — closing it is theirs, as the row is always there.
+    bottomOpen = 'drafts';
   }
 
   function removeDraft(id: number): void {
@@ -514,6 +530,24 @@
       selected: selectedEntity,
     }),
   );
+  /** The bottom panels this workspace has something to put in, in the order the
+   *  row offers them. A panel with nothing to show is not offered: an empty body
+   *  behind a button is a promise the row cannot keep. */
+  const bottomTabs = $derived.by((): { key: BottomPanel; label: string }[] => {
+    const out: { key: BottomPanel; label: string }[] = [];
+    if (currentDrafts.length > 0) out.push({ key: 'drafts', label: `Drafts (${currentDrafts.length})` });
+    const fns = currentContext?.functions ?? [];
+    if (fns.length > 0) out.push({ key: 'functions', label: `Functions (${fns.length})` });
+    const enums = currentContext?.enums ?? [];
+    if (enums.length > 0) out.push({ key: 'enums', label: `Enum types (${enums.length})` });
+    return out;
+  });
+  const bottomShown = $derived(
+    bottomPanelShown(
+      bottomOpen,
+      bottomTabs.map((t) => t.key),
+    ),
+  );
 
   // Successfully-inspected contexts, for cross-profile search.
   const searchable = $derived.by(() => {
@@ -527,6 +561,12 @@
   function jumpTo(profile: string, id: string): void {
     selectedProfile = profile;
     selectedEntity = id;
+    // Naming a relation is asking for the pane that describes it, and an open
+    // bottom panel has collapsed that pane. Without this, a search hit in another
+    // database lands on whatever was open: measured, jumping to a relation with
+    // Enum types up left the enum list on screen and the detail pane at 0px, in a
+    // database the operator had not been looking at.
+    bottomOpen = null;
   }
 
   async function refresh(): Promise<void> {
@@ -632,6 +672,11 @@
   function selectProfile(name: string): void {
     selectedProfile = name;
     selectedEntity = null;
+    // Another database is another workspace. The panel would otherwise follow the
+    // operator across it — the enum types of the database they just left, replaced
+    // by the enum types of this one, on a screen they opened to look at a map. It is
+    // the one piece of workspace state that had no profile in it.
+    bottomOpen = null;
     if (!results[name]) void inspect(name);
   }
 
@@ -661,6 +706,23 @@
          the bar above the workspace while it is selected), and no aggregate is
          stated here (that would put the same claim on two surfaces again). -->
     <div class="top-actions">
+      <!-- The rail's fold lives out here, not on the rail: folded, the rail is not
+           on screen to carry its own way back, so a control that hides it cannot sit
+           inside it. The header is the one surface that is always up. (The rail is
+           not the only way to change database — the search jumps across them, and a
+           card in the all-databases view selects one — but it is the only place they
+           are all listed, and losing the list with no way to ask for it back is the
+           failure this avoids.) -->
+      <button
+        class="add"
+        data-testid="rail-toggle"
+        data-folded={railFolded}
+        aria-expanded={!railFolded}
+        onclick={() => (railFolded = !railFolded)}
+        title={railFolded ? 'Show the list of databases' : 'Stow the list of databases'}
+      >
+        Databases
+      </button>
       <button class="add" data-testid="settings-toggle" onclick={toggleSettings}>
         {showSettings ? 'Close' : 'Settings'}
       </button>
@@ -856,12 +918,14 @@
          back to the all-databases view in that state. Keying the rail on the
          same value keeps `aria-current` on whatever is actually showing rather
          than on nothing at all. -->
-    <ProfileRail
-      {profiles}
-      selected={currentProfile?.name ?? null}
-      onselect={selectProfile}
-      onall={showAllDatabases}
-    />
+    {#if !railFolded}
+      <ProfileRail
+        {profiles}
+        selected={currentProfile?.name ?? null}
+        onselect={selectProfile}
+        onall={showAllDatabases}
+      />
+    {/if}
     <div class="pane">
       {#if currentProfile === null}
         <!-- Every profile side by side: this is where annotation coverage is
@@ -934,8 +998,12 @@
                  for a relation the pane actually found. With nothing selected the
                  pane is a placeholder, and with a ghost or a stale selection it is
                  one sentence with no tab row — collapsing the map for either would
-                 leave the workspace showing neither the map nor a way back to it. -->
-            <div class="split" class:expanded={detailShown}>
+                 leave the workspace showing neither the map nor a way back to it.
+
+                 `collapsed` is the bottom row's switch, and it is the same one: a
+                 panel down there takes the workspace rather than divide it, and the
+                 row that closes it stays on screen below. -->
+            <div class="split" class:expanded={detailShown} class:collapsed={bottomShown !== null}>
               <SemanticMap
                 context={currentContext}
                 selected={selectedEntity}
@@ -960,18 +1028,44 @@
                 <aside class="placeholder"><p>Click a relation on the map to see its compiled semantics - and what a default-configured kozou server hands your AI for it.</p></aside>
               {/if}
             </div>
-            {#if currentDrafts.length > 0}
-              <DraftPanel
-                drafts={currentDrafts}
-                status={draftStatusFor}
-                onremove={removeDraft}
-                onclear={clearCurrentDrafts}
-                oncopy={copyDrafts}
-                onsave={saveDrafts}
-              />
+            <!-- The bottom row. Three panels that each collapsed themselves cost the
+                 workspace a row each while all three were shut — measured in the
+                 built app at the default 1280x840 window, a shut panel is 34px, and
+                 they sat below the pane row that the rest of this layout work spent
+                 its time giving a definite height to. One row, and the body of
+                 whichever is open. -->
+            {#if bottomShown !== null}
+              <div class="bottom-body" data-testid="bottom-body">
+                {#if bottomShown === 'drafts'}
+                  <DraftPanel
+                    drafts={currentDrafts}
+                    status={draftStatusFor}
+                    onremove={removeDraft}
+                    onclear={clearCurrentDrafts}
+                    oncopy={copyDrafts}
+                    onsave={saveDrafts}
+                  />
+                {:else if bottomShown === 'functions'}
+                  <FunctionsPanel
+                    functions={currentContext.functions ?? []}
+                    aiViews={current.aiViews}
+                  />
+                {:else}
+                  <EnumsPanel enums={currentContext.enums} />
+                {/if}
+              </div>
             {/if}
-            <FunctionsPanel functions={currentContext.functions ?? []} aiViews={current.aiViews} />
-            <EnumsPanel enums={currentContext.enums} />
+            {#if bottomTabs.length > 0}
+              <nav class="bottom-row" data-testid="bottom-row" aria-label="Workspace panels">
+                {#each bottomTabs as t (t.key)}
+                  <button
+                    data-testid={`bottom-${t.key}`}
+                    data-open={bottomShown === t.key}
+                    onclick={() => (bottomOpen = bottomOpen === t.key ? null : t.key)}>{t.label}</button
+                  >
+                {/each}
+              </nav>
+            {/if}
           {:else}
             <p class="empty-note">
               {selectedProfile} is not inspected yet - use the inspect link above{inspecting
@@ -1152,6 +1246,12 @@
   .add {
     font-size: 0.85rem;
   }
+  /* Stowed reads as the state it is, not as a button waiting to be pressed: with
+     the rail gone there is nothing else on screen that says the list exists. */
+  .add[data-folded='true'] {
+    background: #eef3ff;
+    border-color: #2f6fed;
+  }
   .error {
     color: #a00;
     margin: 0;
@@ -1312,6 +1412,59 @@
   }
   .split.expanded > :global(.map-wrap) {
     display: none;
+  }
+  /* A bottom panel takes the workspace, so the pane row goes out of the flow
+     entirely — including its 460px floor, which is why this is `display: none` and
+     not a height. The floor exists so a short window keeps the room it had; a row
+     that is not showing does not need room, and leaving the floor in place would
+     make opening a panel push the page into a scroll on exactly the windows the
+     floor was written for. */
+  .split.collapsed {
+    display: none;
+  }
+  /* One row, whatever is in it. The bodies above it are ordinary panels and bring
+     their own box; this is only the strip of names. */
+  .bottom-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+  .bottom-row button {
+    border: 1px solid #ccc;
+    border-radius: 8px;
+    background: #fff;
+    padding: 0.2rem 0.7rem;
+    font: inherit;
+    font-size: 0.8rem;
+    color: #444;
+    cursor: pointer;
+  }
+  .bottom-row button[data-open='true'] {
+    background: #eef3ff;
+    border-color: #2f6fed;
+    color: inherit;
+  }
+  /* The open body scrolls inside itself for the same reason the panes do: it has
+     the workspace's height now, and a long enum list must not grow the shell.
+
+     And it has a floor, for the reason stated as a rule further up this file: a
+     scroll container inside a squeezed flex column has none of its own, so either
+     it gets one or the thing that squeezes it must not. Releasing the pane row's
+     460px is what let the body have the workspace, and it is also what left the
+     body with nothing underneath it — measured in the built app at a 1280x460
+     window with Settings open, the body was 0px of visible height against 34px of
+     content, with the page not overflowing either, so there was no scroll anywhere
+     that could reach the list. Folding the rail made it worse rather than better,
+     because the rail's own floor had been the last one in the shell.
+
+     8rem, not the pane row's 460px: this is a supporting panel and the row above
+     it is the subject, so a short window should spend what it has on the subject
+     and let this one scroll. Past that the page scrolls, which is the same
+     accepted degradation the pane row and the rail already document. */
+  .bottom-body {
+    flex: 1;
+    min-height: 8rem;
+    overflow-y: auto;
   }
   .placeholder {
     border: 1px dashed #ccc;
