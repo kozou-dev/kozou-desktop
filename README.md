@@ -53,6 +53,20 @@ whole width, because a row grid in a side column is mostly horizontal scrolling.
 so getting back to the map after browsing is one click, and reading semantics
 wide is available without going through Data.
 
+**Databases** in the header stows the rail. Between switches it is a list nobody
+is reading, and the database you are in is named in the bar above the workspace
+anyway; the width it gives up goes to the map, which is the pane that wanted it
+(measured at a 1280px window: the map goes from 529px to 751px, and the detail
+column does not move). The button stays in the header while it is stowed, because
+a control that hides something cannot live inside what it hides.
+
+**Enum types**, **Functions** and **Drafts** share one row along the bottom of
+the workspace. Shut, that row is the whole of what they cost; opening one gives
+it the workspace and collapses the map and the pane, the same switch the Data tab
+makes, and the row stays below it to shut again. Drafting a `COMMENT ON`
+statement opens the drafts panel, since a statement you have to go looking for is
+one you have no reason to think exists.
+
 Connect with a **least-privilege role**. On Supabase, do **not** use
 `service_role`/`postgres` (they bypass row-level security). A read-only role is
 enough for everything this build does: it introspects inside a `READ ONLY`

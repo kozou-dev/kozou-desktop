@@ -90,6 +90,16 @@ async function launchWithProfile(
   return { app, page, userData };
 }
 
+/** Select a relation on the map. Emitting a statement opens the drafts panel, and a
+ *  panel at the bottom of the workspace takes the whole of it - so reaching the map
+ *  again is a deliberate step, the same one an operator takes: shut the panel from
+ *  the row that is still on screen. */
+async function selectOnMap(page: Page, qualifiedName: string): Promise<void> {
+  const open = page.locator('[data-testid^="bottom-"][data-open="true"]');
+  if ((await open.count()) > 0) await open.first().click();
+  await page.getByTestId(`map-node-${qualifiedName}`).click({ timeout: 30_000 });
+}
+
 test('comment editor: seeded verbatim, emits per relation kind, applies nothing', async () => {
   const { app, page } = await launchWithProfile('emit');
 
@@ -146,7 +156,7 @@ test('comment editor: seeded verbatim, emits per relation kind, applies nothing'
 
     // --- an ordinary view gets the other keyword -----------------------------
     const viewBefore = await storedComment('public.recent_orders');
-    await page.getByTestId('map-node-public.recent_orders').click();
+    await selectOnMap(page, 'public.recent_orders');
     await expect(page.getByTestId('detail-pane')).toContainText('public.recent_orders');
     await page.getByTestId('edit-relation-comment').click();
     await page.getByTestId('comment-text').fill('Ordinary view, edited.');
@@ -157,7 +167,7 @@ test('comment editor: seeded verbatim, emits per relation kind, applies nothing'
 
     // --- a column, addressed through its relation ----------------------------
     const emailBefore = await storedColumnComment('public.customers', 'email');
-    await page.getByTestId('map-node-public.customers').click();
+    await selectOnMap(page, 'public.customers');
     await page.getByTestId('edit-column-comment-email').click();
     const columnText = page.getByTestId('comment-text');
     await expect(columnText).toHaveValue(/@ai: may be NULL for walk-in customers/);
