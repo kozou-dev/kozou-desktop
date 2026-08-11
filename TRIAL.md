@@ -1,7 +1,7 @@
 # Trying kozou Desktop — what feedback helps
 
 Thanks for trialing the semantic map. It is an early, experimental build
-(`v0.3.0-alpha.1`), and we are trying to learn one thing: **does seeing your
+(`v0.4.0-alpha.1`), and we are trying to learn one thing: **does seeing your
 database's compiled semantics — comments, `@ai`/`@policy` notes, views, and
 relationships — as a visual map actually help you in real work?**
 
