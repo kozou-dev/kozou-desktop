@@ -272,6 +272,89 @@ test('two profiles: map, detail pane, and AI view end-to-end', async () => {
     expect(await mapWidth()).toBe(docked.map);
   }
 
+  // --- the way back survives a scrolled page --------------------------------
+  // The fold is the only way to ask the rail back, and this layout accepts the
+  // page scrolling once the region above the workspace plus the pane row's floor
+  // exceed the window. Measured on this layout with the escape disabled: 203px of
+  // scroll at 600, 394 at 520 with Settings open, 363 at 440, and the control at
+  // top -89, -169 and -249 - off screen, not hit-testable, and the rail cannot be
+  // stowed at all. An operator reported exactly that.
+  //
+  // Asserted as "inside the viewport AND the thing a click at its centre actually
+  // reaches", not `toBeVisible()`: visibility does not require being on screen,
+  // which is the trap the map pane's guard above was written for. The scroll
+  // itself is asserted first, because a layout that stopped overflowing would
+  // leave the rest of this passing while testing nothing.
+  //
+  // Several sizes, and one of them stowed. Both halves of that were learned the
+  // hard way. An earlier version ran at 600 alone - the one size where a `sticky`
+  // control still held - so it was green while the bug it existed to prevent was
+  // live at 520 and 440. And every case ran with the list showing, which is the
+  // state where this control is one of several ways to the same place; stowed, it
+  // is the only way back, and a change that killed the escape only in that state
+  // passed all three sizes. So the stowed case also clicks: a raw click at the
+  // control's own centre, from the scrolled position, and the list has to return.
+  const reachable = async (): Promise<Record<string, boolean>> =>
+    page.getByTestId('rail-toggle').evaluate((el) => {
+      const g = globalThis as unknown as {
+        innerHeight: number;
+        document: {
+          scrollingElement: { scrollTop: number; scrollHeight: number };
+          elementFromPoint: (x: number, y: number) => unknown;
+        };
+      };
+      const doc = g.document.scrollingElement;
+      doc.scrollTop = doc.scrollHeight;
+      const r = el.getBoundingClientRect();
+      const hit = g.document.elementFromPoint(
+        Math.round(r.left + r.width / 2),
+        Math.round(r.top + r.height / 2),
+      );
+      return {
+        scrolled: doc.scrollTop > 0,
+        onScreen: r.top >= 0 && r.bottom <= g.innerHeight && r.height > 0,
+        reached: hit === el || el.contains(hit as Parameters<typeof el.contains>[0]),
+      };
+    });
+  for (const [height, withSettings, stowed] of [
+    [600, false, false],
+    [520, true, false],
+    [440, false, true],
+  ] as [number, boolean, boolean][]) {
+    await app.evaluate(({ BrowserWindow }, h) => {
+      BrowserWindow.getAllWindows()[0]!.setSize(1280, h);
+    }, height);
+    if (withSettings) await page.getByTestId('settings-toggle').click();
+    if (stowed) {
+      await page.getByTestId('rail-toggle').click();
+      await expect(page.getByTestId('profile-rail')).toHaveCount(0);
+    }
+    // toPass, because the escape is decided from a scroll event: the first read
+    // after setting scrollTop can land before the component has been told.
+    await expect(async () => {
+      expect(await reachable()).toEqual({ scrolled: true, onScreen: true, reached: true });
+    }).toPass({ timeout: 5000 });
+    if (stowed) {
+      // Not `railToggle.click()`: the locator scrolls its target into view first,
+      // which would answer a question nobody asked. This is the point the probe
+      // above said a person could aim at.
+      const at = await page.getByTestId('rail-toggle').evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+      });
+      await page.mouse.click(at.x, at.y);
+      await expect(page.getByTestId('profile-rail')).toBeVisible();
+    }
+    if (withSettings) await page.getByTestId('settings-toggle').click();
+    await page.evaluate(() => {
+      const g = globalThis as unknown as { document: { scrollingElement: { scrollTop: number } } };
+      g.document.scrollingElement.scrollTop = 0;
+    });
+  }
+  await app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]!.setSize(1280, 840);
+  });
+
   // Exactly one of the two views is mounted, and each states the row-access
   // level once. The card and the profile bar render that level from the same
   // component, so what has to hold is that they are never both on screen — two

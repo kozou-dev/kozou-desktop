@@ -53,12 +53,15 @@ whole width, because a row grid in a side column is mostly horizontal scrolling.
 so getting back to the map after browsing is one click, and reading semantics
 wide is available without going through Data.
 
-**Databases** in the header stows the rail. Between switches it is a list nobody
-is reading, and the database you are in is named in the bar above the workspace
-anyway; the width it gives up goes to the map, which is the pane that wanted it
-(measured at a 1280px window: the map goes from 529px to 751px, and the detail
-column does not move). The button stays in the header while it is stowed, because
-a control that hides something cannot live inside what it hides.
+The icon in the left margin, level with **All databases**, stows the database
+list. Between switches it is a list nobody is reading, and the database you are
+in is named in the bar above the workspace anyway; the width it gives up goes to
+the map, which is the pane that wanted it (measured at a 1280px window: the map
+goes from 529px to 751px, and the detail column does not move). The icon costs
+none of that width, because it sits in the margin the shell already had. It stays
+there whether the list is showing or not — a control that hides something cannot
+live inside what it hides — and it stays on screen when the page scrolls, because
+a way back you have to scroll back up to find is one you will not find.
 
 **Enum types**, **Functions** and **Drafts** share one row along the bottom of
 the workspace. Shut, that row is the whole of what they cost; opening one gives
