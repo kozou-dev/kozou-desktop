@@ -133,6 +133,50 @@
    *  switches it is 13rem of width spent on a list nobody is reading. Manual only:
    *  what was asked for is a menu that stows, not a width that guesses. */
   let railFolded = $state(false);
+  /** Has the fold control been pushed off the top of the window by a scroll, and
+   *  therefore taken out of the flow to stay reachable?
+   *
+   *  It rests in the flow, in the shell's left padding beside the row it labels,
+   *  and that is where CSS puts it in every state that does not scroll — Settings
+   *  open, the add form open, an error line up, any of them. Nothing here runs at
+   *  rest, so nothing here can get the resting position wrong. The first attempt
+   *  placed it from script in all states and did exactly that: measured, the icon
+   *  sat at 68 while its anchor was at 113, 225 and 192.
+   *
+   *  What script is for is the one state CSS cannot express. `sticky` is clamped
+   *  to its containing block, every box in this shell is capped at `100dvh` by
+   *  the load-bearing `height` on `main`, and so a pinned control holds for about
+   *  one viewport of spill and then rides away with the page — which is the
+   *  failure this control exists to prevent, and it reproduced: 1280x520 with
+   *  Settings open put the icon under the header, 1280x440 put it off screen at
+   *  top -10, and the app's own default window did the same after two presses of
+   *  View > Zoom In (Electron ships that menu). Making the shell its own scroll
+   *  container does not help — measured both ways, the icon lands at the same
+   *  38 / 30 / -10 / -34.
+   *
+   *  So the escape is evaluated on scroll and on a window change, which are the
+   *  only things that can cause it, and both are things this component is told
+   *  about. `topHeight` is what the pinned header measures right now rather than
+   *  a constant, because the header wraps on a narrow window: measured with the
+   *  add form closed, 53px down to a 490px viewport and 69px from 480px down. (An
+   *  earlier version of this comment said 53 at 460 and 68 at 400. Both were read
+   *  with the add form open, which shortens its own button to "Close" and takes a
+   *  line out of the header.) */
+  let escaped = $state(false);
+  let scrollY = $state(0);
+  let winW = $state(0);
+  let winH = $state(0);
+  let topHeight = $state(0);
+  let bodyEl = $state<HTMLDivElement | null>(null);
+  let gutterEl = $state<HTMLDivElement | null>(null);
+  /** The line the control may not cross. It is the underside of the header while
+   *  the header is itself pinned, which is the case this exists for; the header's
+   *  own pin is bounded the same way everything else here is, so past about a
+   *  viewport of spill this is simply a fixed line 6px below where that underside
+   *  would have been. Measured at 1280x440 - one of the sizes the guard drives -
+   *  the header has gone to 18px and the control parks at 59. Reachable either
+   *  way, which is what it is for; not "the header's underside" in that state. */
+  const foldFloor = $derived(topHeight + 6);
   /** Where the bridge lives — a property of the installation, not of a profile,
    *  so it is asked for once and kept. Null until it has arrived, or after a
    *  failed ask; `loadBridgeLauncher` re-asks when a config panel is opened. */
@@ -489,6 +533,23 @@
   $effect(() => {
     if (snippetFor !== null && shownSnippetFor === null) snippetFor = null;
   });
+  /** The escape, and the way back from it. Both are decided from the row's own
+   *  position: `.body`'s top is where the control rests, since the control is the
+   *  first thing in that row and is aligned to it. Out means that line has gone
+   *  above the header's underside; back means it has returned. The reads are the
+   *  whole dependency list — a scroll, a window change, a header that re-measured
+   *  — because nothing else can move a viewport line. */
+  $effect(() => {
+    void scrollY;
+    void winW;
+    void winH;
+    const floor = foldFloor;
+    const row = bodyEl;
+    if (row === null) return;
+    // The row decides, not the control: once the control is out of the flow its
+    // own top is the clamped value, which would never come back under the floor.
+    escaped = row.getBoundingClientRect().top < floor;
+  });
   const shownSnippetFor = $derived(
     snippetFor !== null &&
       snippet !== null &&
@@ -694,8 +755,10 @@
   void loadBridgeLauncher();
 </script>
 
+<svelte:window bind:scrollY bind:innerWidth={winW} bind:innerHeight={winH} />
+
 <main>
-  <header class="top">
+  <header class="top" bind:clientHeight={topHeight}>
     <h1>kozou Desktop <span class="tag">Semantic Map</span></h1>
     <!-- Nothing here speaks for MCP. The permission lived here as an answered
          question ("MCP served by:", then "This app may serve MCP:") above cards
@@ -705,24 +768,9 @@
          where that profile is described (its card in the all-databases view, or
          the bar above the workspace while it is selected), and no aggregate is
          stated here (that would put the same claim on two surfaces again). -->
+    <!-- What is left here acts on data and on configuration. The rail's fold is
+         not one of those and is not here — see `.rail-gutter` below. -->
     <div class="top-actions">
-      <!-- The rail's fold lives out here, not on the rail: folded, the rail is not
-           on screen to carry its own way back, so a control that hides it cannot sit
-           inside it. The header is the one surface that is always up. (The rail is
-           not the only way to change database — the search jumps across them, and a
-           card in the all-databases view selects one — but it is the only place they
-           are all listed, and losing the list with no way to ask for it back is the
-           failure this avoids.) -->
-      <button
-        class="add"
-        data-testid="rail-toggle"
-        data-folded={railFolded}
-        aria-expanded={!railFolded}
-        onclick={() => (railFolded = !railFolded)}
-        title={railFolded ? 'Show the list of databases' : 'Stow the list of databases'}
-      >
-        Databases
-      </button>
       <button class="add" data-testid="settings-toggle" onclick={toggleSettings}>
         {showSettings ? 'Close' : 'Settings'}
       </button>
@@ -911,7 +959,46 @@
        the profile being worked on. That is also what keeps the row-access and MCP
        blocks (rendered by both the card and the profile bar) from appearing
        twice on screen at once. -->
-  <div class="body">
+  <div class="body" bind:this={bodyEl}>
+    <!-- The fold, in a column of its own that is always there.
+
+         Not in the header: what is up there acts on data and on configuration,
+         and an operator read `Databases` beside `Settings` and `+ Add database`
+         as a third way to open something. It only changes the layout, so it sits
+         with the thing it lays out. The word was wrong as well as the place -
+         what folds is the list, and the databases are all still there, still
+         searched across, with one of them still selected.
+
+         Not inside the rail either: folded, the rail is not on screen to carry
+         its own way back. So the column stays and the rail goes, which also
+         means the control never moves - the operator finds it in the same place
+         in both states, and that is most of what made the header version hard.
+
+         No label. The one it had named its contents rather than itself, and the
+         icon says which part of the window this is about. `title` and
+         `aria-label` carry the words. -->
+    <div
+      class="rail-gutter"
+      class:escaped
+      style={escaped ? `top: ${foldFloor}px` : ''}
+      bind:this={gutterEl}
+    >
+      <button
+        class="rail-fold"
+        class:folded={railFolded}
+        data-testid="rail-toggle"
+        data-folded={railFolded}
+        aria-expanded={!railFolded}
+        onclick={() => (railFolded = !railFolded)}
+        title={railFolded ? 'Show the database list' : 'Hide the database list'}
+        aria-label={railFolded ? 'Show the database list' : 'Hide the database list'}
+      >
+        <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="1" y="2.5" width="14" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.3" />
+          <rect class="fill" x="1" y="2.5" width="5" height="11" rx="2" fill="currentColor" />
+        </svg>
+      </button>
+    </div>
     <!-- `currentProfile?.name`, not `selectedProfile`: a profile can be selected
          by name and no longer be in the list (the reconcile after a row-access
          prompt drops one that was deleted under it), and the working area falls
@@ -1118,10 +1205,41 @@
     flex-direction: column;
     gap: 0.9rem;
   }
+  /* Sticky, because "always up" was a claim this header could not keep. The
+     layout accepts the page scrolling — `.split`'s floor comment documents it as
+     the degradation rather than a failure — and measured, the shell spills by up
+     by hundreds of pixels in states the design allows - measured across the eight
+     window and zoom cases the guard's comment names, 203px to 997px - taking
+     everything up here with it. The
+     fold used to ride along, which is how an operator came to have no way back
+     at all; it now has a column of its own (see `.rail-gutter`), and what is left
+     here is Settings and + Add database.
+
+     This pin is bounded and the bound is not stated by `sticky` itself: a sticky
+     box is clamped to its containing block, and this one's is `main`, which is
+     `height: 100dvh` by a load-bearing decision. So it holds while the spill is
+     under about one viewport and releases past that. Measured with the shell its
+     own scroll container instead of the page, to see whether that was the cause:
+     it is not — the control lands at the same 38 / 30 / -10 / -34 either way.
+
+     The negative margins pay back `main`'s padding so the pinned bar covers the
+     full width of what moves under it; without them the gutters show a strip of
+     scrolling content beside a bar that is standing still.
+
+     `z-index: 5` is above ordinary content and BELOW the search results
+     (`SearchBar`'s `.results` is 10). A dropdown the operator just opened should
+     not be clipped by this bar, and the bar does not need to win against a
+     surface that closes on the next click. */
   .top {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: #fafafa;
+    margin: -1rem -1.5rem 0;
+    padding: 1rem 1.5rem 0.5rem;
   }
   .top-actions {
     display: flex;
@@ -1246,12 +1364,6 @@
   .add {
     font-size: 0.85rem;
   }
-  /* Stowed reads as the state it is, not as a button waiting to be pressed: with
-     the rail gone there is nothing else on screen that says the list exists. */
-  .add[data-folded='true'] {
-    background: #eef3ff;
-    border-color: #2f6fed;
-  }
   .error {
     color: #a00;
     margin: 0;
@@ -1296,10 +1408,61 @@
      note on `main`); `min-width: 0` on `.pane` below is the separate one that
      stops a wide row grid from pushing the rail off the window. */
   .body {
+    position: relative;
     display: flex;
     gap: 0.9rem;
     flex: 1;
     min-height: 0;
+  }
+  /* In the shell's own left padding, not in a column of its own: `left: -1.5rem`
+     is `main`'s `padding-left`, so the control lands against the window edge and
+     the row beside it keeps every pixel it had. Absolute, so its top is the row's
+     top — which is the line the first item of the list sits on, and therefore the
+     alignment holds in every state without anything computing it.
+
+     `.escaped` is the one state script decides: out of the flow, held at the
+     header's underside. See the comment on `escaped` for why CSS cannot do this
+     part. */
+  .rail-gutter {
+    position: absolute;
+    left: -1.5rem;
+    top: 0;
+    z-index: 4;
+  }
+  /* `left: 0`, not a captured coordinate: 0 is where this column already is,
+     since `main`'s `padding-left` and the `-1.5rem` above it cancel. A measured
+     left was the first version and it was the one non-reactive quantity in the
+     design - read once at the escape and never corrected, so a horizontal scroll
+     at that moment pinned the control off the window for good. Measured at a
+     360px window (this shell overflows sideways below about 380, and the window
+     has no minimum): scroll right 21px, scroll down to escape, scroll back left,
+     and the control stayed at x -21 with nothing reachable at its centre. Fixed
+     positioning does not move with a scroll, so 0 needs no correcting. */
+  .rail-gutter.escaped {
+    position: fixed;
+    left: 0;
+  }
+  /* 24px, which is what the padding it sits in measures. */
+  .rail-fold {
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px solid #cfd6e4;
+    border-radius: 6px;
+    background: #fff;
+    color: #4a6cf7;
+    cursor: pointer;
+  }
+  .rail-fold:hover {
+    border-color: #4a6cf7;
+  }
+  /* Folded, the column the icon draws is empty - the picture says which state it
+     is in, since there is no word here to say it. */
+  .rail-fold.folded .fill {
+    fill: none;
   }
   .pane {
     display: flex;
