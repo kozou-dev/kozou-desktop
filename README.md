@@ -1,6 +1,6 @@
 # kozou Desktop
 
-**Status: experimental — validation-first MVP, past its first external trial. Pre-releases (`v0.3.0-alpha.1`) are run from source; no binaries are distributed.**
+**Status: experimental — validation-first MVP, past its first external trial. Pre-releases (`v0.4.0-alpha.1`) are run from source; no binaries are distributed.**
 
 A desktop app that renders the **semantic model** [kozou](https://kozou.org) compiles from your PostgreSQL schema — table/column COMMENTs with `@ai`/`@policy` tags, views and their lineage, foreign-key relationships and their documented meaning — as a human-facing visual map, across multiple databases. It is **read-only by default**: row browsing and row editing are per-profile opt-ins, and the introspection and MCP surfaces stay read-only whether or not you enable them. (A database's row-access level is shown wherever the database is described — the bar above the map when it is selected, and its card in the **All databases** view — and each opt-in is offered separately, browsing first, editing as its own approval; a **Data** tab then appears on the detail pane.) Comments can be **edited into `COMMENT ON` statements the app hands back to you** — it applies none of them, so that path needs no grant and reaches no database.
 
