@@ -281,9 +281,11 @@ This produces `dist/mac-arm64/Kozou.app`. Drag it into `/Applications`
 self-built app carries no Gatekeeper quarantine — and appears as **Kozou**
 in the Dock and Spotlight.
 
-If you instead copy `Kozou.app` to *another* Mac, macOS quarantines it
-(it is unsigned): open it once with **right-click → Open**, or clear the
-flag with `xattr -dr com.apple.quarantine /Applications/Kozou.app`.
+If you instead copy `Kozou.app` to *another* Mac, macOS quarantines it and,
+because it is unsigned, reports it as damaged: the dialog offers **Move to
+Trash** or Cancel, and nothing that opens it anyway. Clearing the flag with
+`xattr -dr com.apple.quarantine /Applications/Kozou.app` is the only way
+past it, which is why nothing is published as a binary.
 
 This is a convenience build for local validation. Nothing is distributed:
 no signing, notarization, auto-update, or published binaries are in scope.
