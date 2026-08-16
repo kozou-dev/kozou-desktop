@@ -504,18 +504,31 @@ export class ProfileStore {
   }
 
   /** Explicitly move a profile to the next free port (user action after an
-   *  "address in use" start failure). Keeps the capability path and the
-   *  locator id so only the port changes in any config the user re-copies —
-   *  and so a bridge entry keeps resolving (it reads the port at run time). */
+   *  "address in use" start failure), rotating the capability path with it.
+   *
+   *  Rotating is free on both sides of the config split, which is why the path
+   *  was kept here and no longer is. A pasted URL names the port, so moving it
+   *  has already invalidated that config — the panel offers whole snippets, so
+   *  the user re-copies the same one line either way. A bridge entry names the
+   *  locator id and nothing else, and the bridge reads port AND path from the
+   *  locator when it connects, so it keeps resolving across both changes.
+   *
+   *  What rotation buys: "address in use" is the one moment this app knows
+   *  another process held the port, and a client still configured with the old
+   *  URL will go on offering the path to whoever holds it now. Rotating turns
+   *  what that discloses into a dead path instead of a key that finds the new
+   *  port. The bridge id is kept — it is the profile's identity in another
+   *  application's config file, and the only thing here a pasted configuration
+   *  depends on surviving. */
   reassignLocalMcpPort(name: string): LocalMcpAllocation {
     const data = this.read();
     const p = this.findProfile(data, name);
     const current = sanitizeLocalMcp(p.localMcp);
-    const path = current?.path ?? generateMcpPath();
     const autoStart = current?.autoStart ?? false;
     const bridgeId = current?.bridgeId ?? generateBridgeId();
     // The current port is part of takenPorts, so the result always differs.
-    p.localMcp = { port: nextFreePort(this.takenPorts(data)), path, autoStart, bridgeId };
+    const port = nextFreePort(this.takenPorts(data));
+    p.localMcp = { port, path: generateMcpPath(), autoStart, bridgeId };
     this.write(data);
     return p.localMcp;
   }
