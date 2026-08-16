@@ -5,9 +5,12 @@
 // EADDRINUSE must NOT renumber — the persisted port is referenced by AI-client
 // configs the user has already pasted, and renumbering would invalidate them
 // without updating those files. Two things move a port, and they differ in
-// what survives. An explicit user reassignment changes the port and KEEPS the
-// rest (path, autoStart, bridge id), so a pasted bridge entry — which resolves
-// the port at run time — keeps working across it. An edit that points the profile
+// what survives. An explicit user reassignment changes the port and the
+// capability path together, keeping autoStart and the bridge id: a pasted
+// bridge entry names only the id and resolves port AND path from the locator
+// at run time, so it keeps working across both, while a pasted URL was already
+// invalidated by the port alone — which is what makes rotating the path free
+// there (see profileStore.reassignLocalMcpPort). An edit that points the profile
 // at another database (dbIdentityKey: host, port, database — see
 // profileStore.upsert) discards the allocation whole, and there invalidating
 // those configs is exactly what is wanted. An edit that keeps the database but

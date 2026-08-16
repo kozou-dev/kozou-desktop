@@ -145,16 +145,25 @@ describe('ProfileStore local MCP fields', () => {
     expect(store.ensureLocalMcpAllocation('a')).toEqual(a);
   });
 
-  it('reassigns to the next free port and keeps the capability path', () => {
+  it('reassigns to the next free port, rotates the capability path, and keeps the bridge id', () => {
     const { store } = freshStore();
     store.upsert({ name: 'a', ...base });
     store.upsert({ name: 'b', ...base });
     const a = store.ensureLocalMcpAllocation('a');
+    store.setLocalMcpAutoStart('a', true);
     store.ensureLocalMcpAllocation('b'); // occupies 3336
     const moved = store.reassignLocalMcpPort('a');
     expect(moved.port).toBe(3337);
-    expect(moved.path).toBe(a.path);
-    expect(store.ensureLocalMcpAllocation('a').port).toBe(3337);
+    // The port move has already invalidated a pasted URL, so the path moves
+    // with it: whatever held the old port learns nothing that finds the new one.
+    expect(moved.path).not.toBe(a.path);
+    expect(moved.path).toMatch(/^\/mcp-[0-9a-f]{32}$/);
+    // The bridge entry names only this, and resolves port and path at run time.
+    expect(moved.bridgeId).toBe(a.bridgeId);
+    expect(moved.autoStart).toBe(true);
+    const after = store.ensureLocalMcpAllocation('a');
+    expect(after.port).toBe(3337);
+    expect(after.path).toBe(moved.path);
   });
 
   it('round-trips autoStart via explicit set', () => {

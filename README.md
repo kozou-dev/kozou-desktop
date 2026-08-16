@@ -217,7 +217,8 @@ Worth knowing before you paste:
   conflict is reported as `MCP port busy` with a **move port** control instead of
   being resolved behind your back, and while that lasts the database's MCP row
   stops offering to open the config panel (a panel you already had open keeps
-  showing the snippet, and says the server is not running). The other thing that
+  showing the snippet, above a note that another process is on this port, so
+  that config would point your client at something else). The other thing that
   replaces it is an edit that points the profile at **another database**, and
   there the invalidation is the point: a config you pasted for one database
   stops resolving rather than quietly serving the new one under the old name.
@@ -234,9 +235,14 @@ Worth knowing before you paste:
   request to stop.
 - **The path is a capability, not authentication.** Any process on your machine
   that can read your AI client's config files can read schema *metadata*
-  through it — never row data. Moving the port keeps the same path, so a config
-  you pasted stays valid for the profile it named. See [EGRESS.md](EGRESS.md)
-  item 10 for the exact local exposure.
+  through it — never row data. **Move port** therefore rotates the path along
+  with the port: a URL you pasted names the old port, which this app no longer
+  serves — and which, in the case that made you move, another process still
+  holds — so that line is re-copied either way, and rotating means what the
+  other process may have learned is a dead path rather than one that finds the
+  new port. A bridge entry names only the locator id and is unaffected — it
+  reads both port and path from this app when it connects. See
+  [EGRESS.md](EGRESS.md) item 10 for the exact local exposure.
 - **Claude Code, project scope**: a server pasted into a project `.mcp.json`
   sits at `Pending approval` until you approve it once inside `claude`. The
   copied command adds no `--scope`, so it lands in whatever scope your CLI
