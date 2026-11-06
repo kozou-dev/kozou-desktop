@@ -23,7 +23,7 @@ AI agents already see this model through kozou's MCP describe surface. Generic D
 
 ## Try it (trial build)
 
-No installer yet — run it from source (Node 22+ and [pnpm](https://pnpm.io) required):
+No installer yet — run it from source (Node 22.12+ and [pnpm](https://pnpm.io) required):
 
 ```sh
 git clone https://github.com/kozou-dev/kozou-desktop.git
