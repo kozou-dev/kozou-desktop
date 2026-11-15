@@ -40,7 +40,7 @@ import type {
   McpWorkerStarted,
 } from '../shared/types.js';
 import type { McpLocatorWriter } from './mcpLocatorFile.js';
-import type { ProfileStore } from './profileStore.js';
+import type { ProfileConnection, ProfileStore } from './profileStore.js';
 
 const ENV_KEY = 'KOZOU_DESKTOP_DB_URL';
 
@@ -131,10 +131,39 @@ export class McpServerManager {
     }
 
     const alloc = this.store.ensureLocalMcpAllocation(name);
-    const connection = this.store.connectionUrl(name);
+    // Registered before the password is decrypted, which is asynchronous: a
+    // second start in the meantime sees 'starting' and returns instead of
+    // forking a second server onto the same port, and a stop in the meantime
+    // (user, profile edit, mode switch, quit) has an entry to record its reason
+    // on — kill() does that for an entry with no child yet.
     const entry: Entry = { status: 'starting', stderrTail: [] };
     this.entries.set(name, entry);
     this.onChange();
+
+    let connection: ProfileConnection;
+    try {
+      connection = await this.store.connectionUrl(name);
+    } catch (err) {
+      // A keychain refusal. Put the registry back the way this call found it
+      // and let the caller report the error, as before anything was
+      // registered (restoreAutoStart records it as the profile's status).
+      if (this.entries.get(name) === entry) {
+        if (current !== undefined) this.entries.set(name, current);
+        else this.entries.delete(name);
+        this.onChange();
+      }
+      throw err;
+    }
+    if (entry.stopReason !== undefined || this.entries.get(name) !== entry) {
+      // Stopped while the password was being decrypted. Forking now would
+      // serve a profile the user has stopped, edited or removed.
+      if (this.entries.get(name) === entry) {
+        entry.status = entry.stopReason === 'profile-updated' ? 'stopped-profile-updated' : 'stopped';
+        entry.stopReason = undefined;
+        this.onChange();
+      }
+      return { outcome: 'error', error: 'the server was stopped while starting', status: this.status() };
+    }
 
     const child = this.fork(this.workerPath(), {
       env: { [ENV_KEY]: connection.url },
@@ -285,15 +314,15 @@ export class McpServerManager {
    *  stop it rather than silently serving the old database. Restart is a user
    *  action. This method leaves autoStart alone, and the write that follows it
    *  only takes it away when the edit names ANOTHER DATABASE: that discards the
-   *  whole allocation, autoStart included (see ProfileStore.upsert), so a
+   *  whole allocation, autoStart included (see ProfileStore.upsertSealed), so a
    *  repointed profile does not come back on its own. An edit that keeps the same
    *  database but changes what it is reached with — the schema list, the stored
    *  password — stops the server here and keeps the intent, so it returns on the
    *  next launch, still pointed where the operator started it. The caller decides
-   *  relevance (connection-bearing edits only). */
+   *  relevance (connection-bearing edits only). A start still decrypting the
+   *  password counts as running here: kill() marks it and it never forks. */
   async onProfileUpserted(name: string): Promise<void> {
-    const entry = this.entries.get(name);
-    if (entry?.child !== undefined) await this.kill(name, 'profile-updated');
+    await this.kill(name, 'profile-updated');
   }
 
   async onProfileRemoved(name: string): Promise<void> {
@@ -359,8 +388,15 @@ export class McpServerManager {
 
   private async kill(name: string, reason: StopReason): Promise<void> {
     const entry = this.entries.get(name);
-    const child = entry?.child;
-    if (entry === undefined || child === undefined) return;
+    if (entry === undefined) return;
+    const child = entry.child;
+    if (child === undefined) {
+      // A start still decrypting the password has registered its entry but
+      // forked nothing. Recording the reason is the whole stop: start() checks
+      // for one when the decrypt resolves, and gives up instead of forking.
+      if (entry.status === 'starting') entry.stopReason = reason;
+      return;
+    }
     entry.stopReason = reason;
     const exited = new Promise<void>((resolve) => {
       const timer = setTimeout(() => resolve(), STOP_WAIT_MS);

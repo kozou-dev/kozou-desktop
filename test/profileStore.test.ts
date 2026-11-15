@@ -5,17 +5,17 @@ import { describe, expect, it } from 'vitest';
 import { ProfileStore, validateProfileInput, type Encryptor } from '../src/main/profileStore.js';
 
 const fakeEncryptor: Encryptor = {
-  available: () => true,
-  encrypt: (s) => `enc:${Buffer.from(s).toString('base64')}`,
-  decrypt: (b) => Buffer.from(b.slice(4), 'base64').toString(),
+  available: async () => true,
+  encrypt: async (s) => `enc:${Buffer.from(s).toString('base64')}`,
+  decrypt: async (b) => Buffer.from(b.slice(4), 'base64').toString(),
 };
 
 const unavailableEncryptor: Encryptor = {
-  available: () => false,
-  encrypt: () => {
+  available: async () => false,
+  encrypt: async () => {
     throw new Error('unavailable');
   },
-  decrypt: () => {
+  decrypt: async () => {
     throw new Error('unavailable');
   },
 };
@@ -26,9 +26,9 @@ function freshStore(encryptor: Encryptor = fakeEncryptor): { store: ProfileStore
 }
 
 describe('ProfileStore', () => {
-  it('stores no plaintext password on disk and round-trips the connection URL', () => {
+  it('stores no plaintext password on disk and round-trips the connection URL', async () => {
     const { store, dir } = freshStore();
-    store.upsert({
+    await store.upsert({
       name: 'demo',
       url: 'postgresql://app:s3cr3t@localhost:5432/db',
       schemas: ['public'],
@@ -38,13 +38,13 @@ describe('ProfileStore', () => {
     const view = store.list()[0]!;
     expect(view.url).not.toContain('s3cr3t');
     expect(view.hasPassword).toBe(true);
-    expect(store.connectionUrl('demo').url).toBe('postgresql://app:s3cr3t@localhost:5432/db');
+    expect((await store.connectionUrl('demo')).url).toBe('postgresql://app:s3cr3t@localhost:5432/db');
   });
 
-  it('upserts by name and deletes', () => {
+  it('upserts by name and deletes', async () => {
     const { store } = freshStore();
-    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/one', schemas: ['public'] });
-    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/two', schemas: ['public', 'sales'] });
+    await store.upsert({ name: 'a', url: 'postgresql://u@h:5432/one', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://u@h:5432/two', schemas: ['public', 'sales'] });
     expect(store.list()).toHaveLength(1);
     expect(store.list()[0]!.url).toContain('/two');
     expect(store.list()[0]!.schemas).toEqual(['public', 'sales']);
@@ -52,32 +52,81 @@ describe('ProfileStore', () => {
     expect(store.list()).toHaveLength(0);
   });
 
-  it('refuses to store a password when OS encryption is unavailable', () => {
+  it('refuses to store a password when OS encryption is unavailable', async () => {
     const { store } = freshStore(unavailableEncryptor);
-    expect(() =>
+    await expect(
       store.upsert({ name: 'x', url: 'postgresql://u:pw@h:5432/db', schemas: ['public'] }),
-    ).toThrow(/encryption is unavailable/);
+    ).rejects.toThrow(/encryption is unavailable/);
     // A password-less profile is still fine.
-    store.upsert({ name: 'x', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
+    await store.upsert({ name: 'x', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
     expect(store.list()).toHaveLength(1);
   });
 
-  it('validates profile names and schemas', () => {
+  it('writes nothing when the encryption itself is refused', async () => {
+    const { store, dir } = freshStore({
+      ...fakeEncryptor,
+      encrypt: async () => {
+        throw new Error('keychain refused');
+      },
+    });
+    await expect(
+      store.upsert({ name: 'x', url: 'postgresql://u:pw@h:5432/db', schemas: ['public'] }),
+    ).rejects.toThrow(/keychain refused/);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('seals without writing, then writes synchronously', async () => {
+    // profiles:save relies on this split: every await happens in seal(), so
+    // whatever the caller does between its last await and upsertSealed() is
+    // not interleaved with anything else.
+    const { store, dir } = freshStore();
+    const sealed = await store.seal({ name: 'a', url: 'postgresql://app:s3cr3t@h:5432/db', schemas: ['public'] });
+    expect(readdirSync(dir)).toEqual([]);
+    expect(sealed.encryptedPassword).toBeDefined();
+    expect(JSON.stringify(sealed)).not.toContain('s3cr3t');
+    const views = store.upsertSealed(sealed);
+    expect(Array.isArray(views)).toBe(true);
+    expect(store.list()[0]!.hasPassword).toBe(true);
+    expect((await store.connectionUrl('a')).url).toBe('postgresql://app:s3cr3t@h:5432/db');
+  });
+
+  it('rebuilds a connection from one version of the profile when it changes during the decrypt', async () => {
+    let releaseDecrypt = (): void => {};
+    const { store } = freshStore({
+      ...fakeEncryptor,
+      decrypt: (b) =>
+        new Promise((resolve) => {
+          releaseDecrypt = () => resolve(Buffer.from(b.slice(4), 'base64').toString());
+        }),
+    });
+    await store.upsert({ name: 'a', url: 'postgresql://app:old@h:5432/one', schemas: ['public'], timeoutMs: 1_000 });
+    const rebuilding = store.connectionUrl('a');
+    // The decrypt is still outstanding when a save lands.
+    await store.upsert({ name: 'a', url: 'postgresql://u@h:5432/two', schemas: ['sales'], timeoutMs: 2_000 });
+    releaseDecrypt();
+    expect(await rebuilding).toEqual({
+      url: 'postgresql://app:old@h:5432/one',
+      schemas: ['public'],
+      timeoutMs: 1_000,
+    });
+  });
+
+  it('validates profile names and schemas', async () => {
     const { store } = freshStore();
-    expect(() => store.upsert({ name: 'bad name!', url: 'postgresql://u@h/db', schemas: ['public'] })).toThrow(
+    await expect(store.upsert({ name: 'bad name!', url: 'postgresql://u@h/db', schemas: ['public'] })).rejects.toThrow(
       /profile name/,
     );
-    expect(() => store.upsert({ name: 'ok', url: 'postgresql://u@h/db', schemas: [] })).toThrow(/schema/);
+    await expect(store.upsert({ name: 'ok', url: 'postgresql://u@h/db', schemas: [] })).rejects.toThrow(/schema/);
   });
 
-  it('throws a clear error for an unknown profile', () => {
+  it('throws a clear error for an unknown profile', async () => {
     const { store } = freshStore();
-    expect(() => store.connectionUrl('nope')).toThrow(/unknown profile/);
+    await expect(store.connectionUrl('nope')).rejects.toThrow(/unknown profile/);
   });
 
-  it('backs up a corrupt profiles.json (timestamped) before starting empty', () => {
+  it('backs up a corrupt profiles.json (timestamped) before starting empty', async () => {
     const { store, dir } = freshStore();
-    store.upsert({ name: 'keep', url: 'postgresql://u:pw@h:5432/db', schemas: ['public'] });
+    await store.upsert({ name: 'keep', url: 'postgresql://u:pw@h:5432/db', schemas: ['public'] });
     const file = join(dir, 'profiles.json');
     const original = 'not json {';
     writeFileSync(file, original);
@@ -104,9 +153,9 @@ describe('ProfileStore local MCP fields', () => {
     expect(() => store.setMcpMode('remote-only')).toThrow(/mcpMode/);
   });
 
-  it('degrades junk on-disk mcpMode to off instead of propagating it', () => {
+  it('degrades junk on-disk mcpMode to off instead of propagating it', async () => {
     const { store, dir } = freshStore();
-    store.upsert({ name: 'a', ...base });
+    await store.upsert({ name: 'a', ...base });
     const file = join(dir, 'profiles.json');
     const data = JSON.parse(readFileSync(file, 'utf8'));
     data.mcpMode = 'evil';
@@ -114,13 +163,13 @@ describe('ProfileStore local MCP fields', () => {
     expect(store.mcpMode()).toBe('off');
   });
 
-  it("reads an earlier build's remote-only as off and leaves it on disk", () => {
+  it("reads an earlier build's remote-only as off and leaves it on disk", async () => {
     // The mode permitted no start, so reading it as 'off' preserves the
     // behaviour the file already had. A read must not migrate the file: the
     // format stays at version 1, and an older build reading it back would
     // otherwise find its own value gone.
     const { store, dir } = freshStore();
-    store.upsert({ name: 'a', ...base });
+    await store.upsert({ name: 'a', ...base });
     const file = join(dir, 'profiles.json');
     const data = JSON.parse(readFileSync(file, 'utf8'));
     data.mcpMode = 'remote-only';
@@ -129,10 +178,10 @@ describe('ProfileStore local MCP fields', () => {
     expect(JSON.parse(readFileSync(file, 'utf8')).mcpMode).toBe('remote-only');
   });
 
-  it('allocates sticky ports from 3335 and unique capability paths', () => {
+  it('allocates sticky ports from 3335 and unique capability paths', async () => {
     const { store } = freshStore();
-    store.upsert({ name: 'a', ...base });
-    store.upsert({ name: 'b', ...base });
+    await store.upsert({ name: 'a', ...base });
+    await store.upsert({ name: 'b', ...base });
     const a = store.ensureLocalMcpAllocation('a');
     const b = store.ensureLocalMcpAllocation('b');
     expect(a.port).toBe(3335);
@@ -145,10 +194,10 @@ describe('ProfileStore local MCP fields', () => {
     expect(store.ensureLocalMcpAllocation('a')).toEqual(a);
   });
 
-  it('reassigns to the next free port, rotates the capability path, and keeps the bridge id', () => {
+  it('reassigns to the next free port, rotates the capability path, and keeps the bridge id', async () => {
     const { store } = freshStore();
-    store.upsert({ name: 'a', ...base });
-    store.upsert({ name: 'b', ...base });
+    await store.upsert({ name: 'a', ...base });
+    await store.upsert({ name: 'b', ...base });
     const a = store.ensureLocalMcpAllocation('a');
     store.setLocalMcpAutoStart('a', true);
     store.ensureLocalMcpAllocation('b'); // occupies 3336
@@ -166,27 +215,27 @@ describe('ProfileStore local MCP fields', () => {
     expect(after.path).toBe(moved.path);
   });
 
-  it('round-trips autoStart via explicit set', () => {
+  it('round-trips autoStart via explicit set', async () => {
     const { store } = freshStore();
-    store.upsert({ name: 'a', ...base });
+    await store.upsert({ name: 'a', ...base });
     store.ensureLocalMcpAllocation('a');
     expect(store.setLocalMcpAutoStart('a', true)?.autoStart).toBe(true);
     expect(store.list()[0]!.localMcp?.autoStart).toBe(true);
     expect(store.setLocalMcpAutoStart('a', false)?.autoStart).toBe(false);
   });
 
-  it('treats stopping a never-allocated profile as a no-op (no port burned)', () => {
+  it('treats stopping a never-allocated profile as a no-op (no port burned)', async () => {
     const { store } = freshStore();
-    store.upsert({ name: 'a', ...base });
+    await store.upsert({ name: 'a', ...base });
     expect(store.setLocalMcpAutoStart('a', false)).toBeUndefined();
     expect(store.list()[0]!.localMcp).toBeUndefined();
     // An explicit start intent does allocate.
     expect(store.setLocalMcpAutoStart('a', true)?.port).toBe(3335);
   });
 
-  it('degrades a shape-invalid on-disk localMcp to absent and self-heals', () => {
+  it('degrades a shape-invalid on-disk localMcp to absent and self-heals', async () => {
     const { store, dir } = freshStore();
-    store.upsert({ name: 'a', ...base });
+    await store.upsert({ name: 'a', ...base });
     const file = join(dir, 'profiles.json');
     const data = JSON.parse(readFileSync(file, 'utf8'));
     data.profiles[0].localMcp = { port: '3335', path: 42 };
@@ -198,12 +247,12 @@ describe('ProfileStore local MCP fields', () => {
     expect(healed.path).toMatch(/^\/mcp-[0-9a-f]{32}$/);
   });
 
-  it('never reuses a capability path when a freed port is recycled', () => {
+  it('never reuses a capability path when a freed port is recycled', async () => {
     const { store } = freshStore();
-    store.upsert({ name: 'a', ...base });
+    await store.upsert({ name: 'a', ...base });
     const first = store.ensureLocalMcpAllocation('a');
     store.remove('a');
-    store.upsert({ name: 'b', ...base });
+    await store.upsert({ name: 'b', ...base });
     const second = store.ensureLocalMcpAllocation('b');
     // Same recycled port, but a fresh secret path — a stale pasted config
     // must never reach a different profile's server.
@@ -211,18 +260,18 @@ describe('ProfileStore local MCP fields', () => {
     expect(second.path).not.toBe(first.path);
   });
 
-  it('preserves main-owned localMcp and stored remoteMcp across renderer upserts that omit them', () => {
+  it('preserves main-owned localMcp and stored remoteMcp across renderer upserts that omit them', async () => {
     const { store } = freshStore();
-    store.upsert({ name: 'a', ...base });
+    await store.upsert({ name: 'a', ...base });
     const alloc = store.ensureLocalMcpAllocation('a');
-    store.upsert({ name: 'a', ...base, remoteMcp: { declared: true, url: 'https://mcp.example.com/mcp' } });
+    await store.upsert({ name: 'a', ...base, remoteMcp: { declared: true, url: 'https://mcp.example.com/mcp' } });
     // Edit without mcp fields (an older build's form would do the same).
-    store.upsert({ name: 'a', ...base, label: 'renamed' });
+    await store.upsert({ name: 'a', ...base, label: 'renamed' });
     const view = store.list()[0]!;
     expect(view.localMcp).toEqual(alloc);
     expect(view.remoteMcp).toEqual({ declared: true, url: 'https://mcp.example.com/mcp' });
     // Explicit clear.
-    store.upsert({ name: 'a', ...base, remoteMcp: { declared: false } });
+    await store.upsert({ name: 'a', ...base, remoteMcp: { declared: false } });
     expect(store.list()[0]!.remoteMcp).toBeUndefined();
     expect(store.list()[0]!.localMcp).toEqual(alloc);
   });
@@ -231,12 +280,12 @@ describe('ProfileStore local MCP fields', () => {
   // the DATABASE it was handed out for — a narrower rule than the row-access
   // grant's, because a preserved allocation only misleads when it makes a pasted
   // entry answer for another database under the same name.
-  it('drops the local-MCP allocation when an edit repoints the profile at another database', () => {
+  it('drops the local-MCP allocation when an edit repoints the profile at another database', async () => {
     const { store } = freshStore();
-    store.upsert({ name: 'a', ...base });
+    await store.upsert({ name: 'a', ...base });
     const before = store.ensureLocalMcpAllocation('a');
 
-    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/other', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://u@h:5432/other', schemas: ['public'] });
     expect(store.list()[0]!.localMcp).toBeUndefined();
 
     // Both halves of a stale config have to stop resolving. A pasted URL 404s
@@ -255,16 +304,16 @@ describe('ProfileStore local MCP fields', () => {
   // was the only one covered. A comparison on the pathname alone would pass that
   // one test while a prod-to-staging edit kept the port, path, bridge id and
   // autoStart of the database the config was pasted for.
-  it('drops the allocation when the host or the port changes, not only the database name', () => {
+  it('drops the allocation when the host or the port changes, not only the database name', async () => {
     for (const repointed of [
       'postgresql://u@other-host:5432/db',
       'postgresql://u@h:5433/db',
       'postgresql://u@h:5432/other',
     ]) {
       const { store } = freshStore();
-      store.upsert({ name: 'a', ...base });
+      await store.upsert({ name: 'a', ...base });
       const before = store.ensureLocalMcpAllocation('a');
-      store.upsert({ name: 'a', url: repointed, schemas: ['public'] });
+      await store.upsert({ name: 'a', url: repointed, schemas: ['public'] });
       expect(store.list()[0]!.localMcp, repointed).toBeUndefined();
       const after = store.ensureLocalMcpAllocation('a');
       expect(after.path, repointed).not.toBe(before.path);
@@ -275,28 +324,28 @@ describe('ProfileStore local MCP fields', () => {
   // The username is not part of `dbIdentityKey` on purpose (the same database
   // reached by two roles is one database), so a role change keeps the destination.
   // The grant is what re-asks, and it does.
-  it('keeps the allocation across a role change, and still drops the grant', () => {
+  it('keeps the allocation across a role change, and still drops the grant', async () => {
     const { store } = freshStore();
-    store.upsert({ name: 'a', ...base });
+    await store.upsert({ name: 'a', ...base });
     const alloc = store.ensureLocalMcpAllocation('a');
     store.setRowAccess('a', 'read');
-    store.upsert({ name: 'a', url: 'postgresql://admin@h:5432/db', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://admin@h:5432/db', schemas: ['public'] });
     expect(store.list()[0]!.localMcp).toEqual(alloc);
     expect(store.list()[0]!.rowAccess).toBe('off');
   });
 
   // Spellings of one database. There is no edit form in this app, so a schema
   // change means retyping the URL, and every one of these is a plausible retype.
-  it('keeps the allocation across spellings of the same database', () => {
+  it('keeps the allocation across spellings of the same database', async () => {
     for (const same of [
       'postgresql://u@h/db',
       'postgres://u@h:5432/db',
       'postgresql://u:pw@h:5432/db',
     ]) {
       const { store } = freshStore();
-      store.upsert({ name: 'a', ...base });
+      await store.upsert({ name: 'a', ...base });
       const alloc = store.ensureLocalMcpAllocation('a');
-      store.upsert({ name: 'a', url: same, schemas: ['public'] });
+      await store.upsert({ name: 'a', url: same, schemas: ['public'] });
       expect(store.list()[0]!.localMcp, same).toEqual(alloc);
     }
   });
@@ -306,39 +355,39 @@ describe('ProfileStore local MCP fields', () => {
   // normalized-string fallback is what keeps a byte-identical re-save of one of
   // those from reading as a repoint - which matters because main would not stop the
   // server for it, and a discarded allocation would leave its locator behind.
-  it('falls back to the normalised URL for forms the identity key declines', () => {
+  it('falls back to the normalised URL for forms the identity key declines', async () => {
     const declined = 'postgresql://u@h:5432/db?dbname=other';
     const { store } = freshStore();
-    store.upsert({ name: 'a', url: declined, schemas: ['public'] });
+    await store.upsert({ name: 'a', url: declined, schemas: ['public'] });
     const alloc = store.ensureLocalMcpAllocation('a');
 
     // Same string back: kept.
-    store.upsert({ name: 'a', url: declined, schemas: ['public'] });
+    await store.upsert({ name: 'a', url: declined, schemas: ['public'] });
     expect(store.list()[0]!.localMcp).toEqual(alloc);
 
     // A real edit to it: dropped, even though the key declines both sides.
-    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db?dbname=third', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db?dbname=third', schemas: ['public'] });
     expect(store.list()[0]!.localMcp).toBeUndefined();
   });
 
   // autoStart is the field whose new survival is the point, and it is false in a
   // fresh allocation - so every other test here would pass with autoStart hard-wired
   // to false. These set it true first.
-  it('carries autoStart through a narrowing schema edit and clears it on a widening one', () => {
+  it('carries autoStart through a narrowing schema edit and clears it on a widening one', async () => {
     const wide = { name: 'a', url: base.url, schemas: ['public', 'sales'] };
 
     const narrowing = freshStore().store;
-    narrowing.upsert(wide);
+    await narrowing.upsert(wide);
     narrowing.ensureLocalMcpAllocation('a');
     narrowing.setLocalMcpAutoStart('a', true);
-    narrowing.upsert({ name: 'a', url: base.url, schemas: ['public'] });
+    await narrowing.upsert({ name: 'a', url: base.url, schemas: ['public'] });
     expect(narrowing.list()[0]!.localMcp?.autoStart).toBe(true);
 
     const widening = freshStore().store;
-    widening.upsert({ name: 'a', ...base });
+    await widening.upsert({ name: 'a', ...base });
     const alloc = widening.ensureLocalMcpAllocation('a');
     widening.setLocalMcpAutoStart('a', true);
-    widening.upsert(wide);
+    await widening.upsert(wide);
     const after = widening.list()[0]!.localMcp;
     // The destination survives - what you pasted still names this database - and
     // only the intent goes, so the wider set is served after a deliberate start.
@@ -348,9 +397,9 @@ describe('ProfileStore local MCP fields', () => {
     expect(after?.autoStart).toBe(false);
   });
 
-  it('keeps the local-MCP allocation when the schema set changes, and still drops the grant', () => {
+  it('keeps the local-MCP allocation when the schema set changes, and still drops the grant', async () => {
     const { store } = freshStore();
-    store.upsert({ name: 'a', ...base });
+    await store.upsert({ name: 'a', ...base });
     const alloc = store.ensureLocalMcpAllocation('a');
     store.setRowAccess('a', 'read');
 
@@ -358,7 +407,7 @@ describe('ProfileStore local MCP fields', () => {
     // to do it (the detail pane's words for an out-of-schema relation are "Add
     // its schema to the profile to inspect it"). A pasted config surviving that
     // is the point: it names the same database, which is still the same database.
-    store.upsert({ name: 'a', url: base.url, schemas: ['public', 'sales'] });
+    await store.upsert({ name: 'a', url: base.url, schemas: ['public', 'sales'] });
     expect(store.list()[0]!.localMcp).toEqual(alloc);
     // The grant is a different question: widened schemas reach rows the approval
     // dialog did not name.
@@ -372,9 +421,9 @@ describe('ProfileStore local MCP fields', () => {
   // credential state flip and throw the allocation away underneath it, leaving a
   // locator nothing would clean up until the next launch. Normalized and
   // database-only, both sides now agree that nothing moved.
-  it('keeps the allocation when a hand-written password is normalised out of the stored URL', () => {
+  it('keeps the allocation when a hand-written password is normalised out of the stored URL', async () => {
     const { store, dir } = freshStore();
-    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
     const alloc = store.ensureLocalMcpAllocation('a');
 
     // Put the password into the url field the way a hand edit would.
@@ -385,50 +434,52 @@ describe('ProfileStore local MCP fields', () => {
     expect(store.list()[0]!.localMcp).toEqual(alloc);
 
     // The same URL saved back: main sees no change, and neither does this.
-    store.upsert({ name: 'a', url: 'postgresql://u:pw@h:5432/db', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://u:pw@h:5432/db', schemas: ['public'] });
     expect(store.list()[0]!.localMcp).toEqual(alloc);
   });
 
-  it('keeps the local-MCP allocation across a password rotation and across a change of credential state', () => {
+  it('keeps the local-MCP allocation across a password rotation and across a change of credential state', async () => {
     const { store } = freshStore();
-    store.upsert({ name: 'a', url: 'postgresql://u:old@h:5432/db', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://u:old@h:5432/db', schemas: ['public'] });
     const alloc = store.ensureLocalMcpAllocation('a');
     store.setRowAccess('a', 'read');
 
     // Same server, same database, same role: a client's config still points
     // where it did, so invalidating it would cost the user a repaste for
     // nothing.
-    store.upsert({ name: 'a', url: 'postgresql://u:new@h:5432/db', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://u:new@h:5432/db', schemas: ['public'] });
     expect(store.list()[0]!.localMcp).toEqual(alloc);
 
     // Dropping the stored password changes which credentials the served database
     // is reached with, which is the grant's business and not the destination's.
-    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
     expect(store.list()[0]!.localMcp).toEqual(alloc);
     expect(store.list()[0]!.rowAccess).toBe('off');
   });
 
-  it('validates remoteMcp input at the IPC boundary', () => {
+  it('validates remoteMcp input at the IPC boundary', async () => {
     const { store } = freshStore();
-    expect(() => store.upsert({ name: 'a', ...base, remoteMcp: 'yes' })).toThrow(/remoteMcp must be an object/);
-    expect(() => store.upsert({ name: 'a', ...base, remoteMcp: { declared: 'yes' } })).toThrow(
+    await expect(store.upsert({ name: 'a', ...base, remoteMcp: 'yes' })).rejects.toThrow(
+      /remoteMcp must be an object/,
+    );
+    await expect(store.upsert({ name: 'a', ...base, remoteMcp: { declared: 'yes' } })).rejects.toThrow(
       /declared must be a boolean/,
     );
-    expect(() => store.upsert({ name: 'a', ...base, remoteMcp: { declared: true, url: '' } })).toThrow(
+    await expect(store.upsert({ name: 'a', ...base, remoteMcp: { declared: true, url: '' } })).rejects.toThrow(
       /remoteMcp\.url/,
     );
-    expect(() => store.upsert({ name: 'a', ...base, remoteMcp: { declared: true, url: 'not a url' } })).toThrow(
-      /http\(s\) URL/,
-    );
-    expect(() =>
+    await expect(
+      store.upsert({ name: 'a', ...base, remoteMcp: { declared: true, url: 'not a url' } }),
+    ).rejects.toThrow(/http\(s\) URL/);
+    await expect(
       store.upsert({ name: 'a', ...base, remoteMcp: { declared: true, url: 'javascript:alert(1)' } }),
-    ).toThrow(/http\(s\) URL/);
+    ).rejects.toThrow(/http\(s\) URL/);
     // profiles.json holds only non-secret fields — reject pasted userinfo
     // credentials instead of persisting them in plaintext.
-    expect(() =>
+    await expect(
       store.upsert({ name: 'a', ...base, remoteMcp: { declared: true, url: 'https://user:pw@host/mcp' } }),
-    ).toThrow(/must not contain credentials/);
-    store.upsert({ name: 'a', ...base, remoteMcp: { declared: true, url: 'https://host.example.com/mcp' } });
+    ).rejects.toThrow(/must not contain credentials/);
+    await store.upsert({ name: 'a', ...base, remoteMcp: { declared: true, url: 'https://host.example.com/mcp' } });
     expect(store.list()[0]!.remoteMcp?.url).toBe('https://host.example.com/mcp');
   });
 });
@@ -436,9 +487,9 @@ describe('ProfileStore local MCP fields', () => {
 describe('ProfileStore row access', () => {
   const base = { url: 'postgresql://u@h:5432/db', schemas: ['public'] };
 
-  it('defaults to off and writes no rowAccess key until one is granted', () => {
+  it('defaults to off and writes no rowAccess key until one is granted', async () => {
     const { store, dir } = freshStore();
-    store.upsert({ name: 'a', ...base });
+    await store.upsert({ name: 'a', ...base });
     expect(store.list()[0]!.rowAccess).toBe('off');
     expect(store.rowAccess('a')).toBe('off');
     const stored = JSON.parse(readFileSync(join(dir, 'profiles.json'), 'utf8'));
@@ -446,9 +497,9 @@ describe('ProfileStore row access', () => {
     expect(stored.version).toBe(1);
   });
 
-  it('persists an explicit grant, revokes back to absent, and rejects junk levels', () => {
+  it('persists an explicit grant, revokes back to absent, and rejects junk levels', async () => {
     const { store, dir } = freshStore();
-    store.upsert({ name: 'a', ...base });
+    await store.upsert({ name: 'a', ...base });
     expect(store.setRowAccess('a', 'read')).toBe('read');
     expect(store.rowAccess('a')).toBe('read');
     expect(store.setRowAccess('a', 'readwrite')).toBe('readwrite');
@@ -468,33 +519,33 @@ describe('ProfileStore row access', () => {
     expect(() => store.setRowAccess('nope', 'read')).toThrow(/unknown profile/);
   });
 
-  it('ignores rowAccess smuggled into a profile upsert', () => {
+  it('ignores rowAccess smuggled into a profile upsert', async () => {
     const { store } = freshStore();
-    store.upsert({ name: 'a', ...base, rowAccess: 'readwrite' });
+    await store.upsert({ name: 'a', ...base, rowAccess: 'readwrite' });
     expect(store.rowAccess('a')).toBe('off');
     // Nor can a form save escalate an existing grant.
     store.setRowAccess('a', 'read');
-    store.upsert({ name: 'a', ...base, rowAccess: 'readwrite' });
+    await store.upsert({ name: 'a', ...base, rowAccess: 'readwrite' });
     expect(store.rowAccess('a')).toBe('read');
   });
 
-  it('preserves a granted rowAccess across renderer upserts that omit it', () => {
+  it('preserves a granted rowAccess across renderer upserts that omit it', async () => {
     const { store } = freshStore();
-    store.upsert({ name: 'a', ...base });
+    await store.upsert({ name: 'a', ...base });
     store.setRowAccess('a', 'readwrite');
     // A plain form edit must not silently revoke the grant the user approved:
     // losing row access on every label edit would be poor behaviour.
-    store.upsert({ name: 'a', ...base, label: 'renamed', color: '#123456', timeoutMs: 4_000 });
+    await store.upsert({ name: 'a', ...base, label: 'renamed', color: '#123456', timeoutMs: 4_000 });
     expect(store.list()[0]!.rowAccess).toBe('readwrite');
   });
 
   // The approval dialog names a DATABASE, so the grant lives exactly as long as
   // the facts it named do. These four pin both directions of that rule.
-  it('drops a grant when an edit repoints the profile at another database', () => {
+  it('drops a grant when an edit repoints the profile at another database', async () => {
     const { store, dir } = freshStore();
-    store.upsert({ name: 'a', ...base });
+    await store.upsert({ name: 'a', ...base });
     store.setRowAccess('a', 'readwrite');
-    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/other', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://u@h:5432/other', schemas: ['public'] });
 
     expect(store.rowAccess('a')).toBe('off');
     expect(store.list()[0]!.rowAccess).toBe('off');
@@ -504,62 +555,62 @@ describe('ProfileStore row access', () => {
     expect(raw.profiles[0]).not.toHaveProperty('rowAccess');
   });
 
-  it('drops a grant when the schema set changes', () => {
+  it('drops a grant when the schema set changes', async () => {
     const { store } = freshStore();
-    store.upsert({ name: 'a', ...base });
+    await store.upsert({ name: 'a', ...base });
     store.setRowAccess('a', 'read');
-    store.upsert({ name: 'a', url: base.url, schemas: ['public', 'sales'] });
+    await store.upsert({ name: 'a', url: base.url, schemas: ['public', 'sales'] });
     expect(store.rowAccess('a')).toBe('off');
   });
 
-  it('keeps a grant across a password rotation but not across a change of credential state', () => {
+  it('keeps a grant across a password rotation but not across a change of credential state', async () => {
     const { store } = freshStore();
-    store.upsert({ name: 'a', url: 'postgresql://u:old@h:5432/db', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://u:old@h:5432/db', schemas: ['public'] });
     store.setRowAccess('a', 'readwrite');
 
     // Same server, same database, same role: nothing the user approved changed.
-    store.upsert({ name: 'a', url: 'postgresql://u:new@h:5432/db', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://u:new@h:5432/db', schemas: ['public'] });
     expect(store.rowAccess('a')).toBe('readwrite');
 
     // Dropping the stored password changes which credentials the grant would be
     // exercised with, so it has to be approved again.
-    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
     expect(store.rowAccess('a')).toBe('off');
   });
 
-  it('keeps a grant when the same schema set is merely reordered or repeated', () => {
+  it('keeps a grant when the same schema set is merely reordered or repeated', async () => {
     const { store } = freshStore();
-    store.upsert({ name: 'a', url: base.url, schemas: ['public', 'sales'] });
+    await store.upsert({ name: 'a', url: base.url, schemas: ['public', 'sales'] });
     store.setRowAccess('a', 'readwrite');
 
     // Order does not decide which rows are reachable: a bare relation name is
     // registered only when it is unique across the introspected schemas, and
     // this app addresses relations by qualified name. Revoking here would cost
     // an approval for an edit that changed nothing.
-    store.upsert({ name: 'a', url: base.url, schemas: ['sales', 'public'] });
+    await store.upsert({ name: 'a', url: base.url, schemas: ['sales', 'public'] });
     expect(store.rowAccess('a')).toBe('readwrite');
-    store.upsert({ name: 'a', url: base.url, schemas: ['public', 'sales', 'public'] });
+    await store.upsert({ name: 'a', url: base.url, schemas: ['public', 'sales', 'public'] });
     expect(store.rowAccess('a')).toBe('readwrite');
 
     // Adding a schema is still a change of what the grant reaches.
-    store.upsert({ name: 'a', url: base.url, schemas: ['public', 'sales', 'ops'] });
+    await store.upsert({ name: 'a', url: base.url, schemas: ['public', 'sales', 'ops'] });
     expect(store.rowAccess('a')).toBe('off');
   });
 
-  it('re-grants normally after a connection edit dropped the grant', () => {
+  it('re-grants normally after a connection edit dropped the grant', async () => {
     const { store } = freshStore();
-    store.upsert({ name: 'a', ...base });
+    await store.upsert({ name: 'a', ...base });
     store.setRowAccess('a', 'read');
-    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/other', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://u@h:5432/other', schemas: ['public'] });
     expect(store.rowAccess('a')).toBe('off');
     // The cost of the rule is one more approval, not a profile stuck at 'off'.
     store.setRowAccess('a', 'read');
     expect(store.rowAccess('a')).toBe('read');
   });
 
-  it('degrades a junk on-disk rowAccess to off instead of propagating it', () => {
+  it('degrades a junk on-disk rowAccess to off instead of propagating it', async () => {
     const { store, dir } = freshStore();
-    store.upsert({ name: 'a', ...base });
+    await store.upsert({ name: 'a', ...base });
     const file = join(dir, 'profiles.json');
     for (const junk of ['all', 'write', true, 7, { level: 'readwrite' }]) {
       const data = JSON.parse(readFileSync(file, 'utf8'));
@@ -569,13 +620,13 @@ describe('ProfileStore row access', () => {
       expect(store.list()[0]!.rowAccess).toBe('off');
     }
     // Junk is not carried forward by an upsert either.
-    store.upsert({ name: 'a', ...base });
+    await store.upsert({ name: 'a', ...base });
     expect(JSON.parse(readFileSync(file, 'utf8')).profiles[0]).not.toHaveProperty('rowAccess');
   });
 
-  it('stays readable by a build that predates rowAccess (additive, version 1)', () => {
+  it('stays readable by a build that predates rowAccess (additive, version 1)', async () => {
     const { store, dir } = freshStore();
-    store.upsert({ name: 'a', ...base });
+    await store.upsert({ name: 'a', ...base });
     store.setRowAccess('a', 'readwrite');
     const file = join(dir, 'profiles.json');
     const raw = JSON.parse(readFileSync(file, 'utf8'));

@@ -19,12 +19,39 @@ import { dbIdentityKey } from '../shared/dbIdentity.js';
 import { joinDbUrl, splitDbUrl } from '../shared/url.js';
 import { generateBridgeId, generateMcpPath, nextFreePort } from './mcpAllocation.js';
 
+/** The OS keychain, as the store sees it. Asynchronous because Electron's
+ *  safeStorage is: its synchronous methods are deprecated in Electron 45 and
+ *  removed in 46. */
 export type Encryptor = {
-  available(): boolean;
-  /** plaintext -> opaque printable blob */
-  encrypt(plaintext: string): string;
+  /** Whether a password may be stored at all: an OS keychain backs the key. */
+  available(): Promise<boolean>;
+  /** plaintext -> opaque printable blob. Rejects rather than encrypt with a
+   *  key no keychain protects, so skipping available() cannot store a
+   *  password unprotected. */
+  encrypt(plaintext: string): Promise<string>;
   /** opaque printable blob -> plaintext */
-  decrypt(blob: string): string;
+  decrypt(blob: string): Promise<string>;
+};
+
+export const KEYCHAIN_UNAVAILABLE_MESSAGE =
+  'OS keychain-backed encryption is unavailable; refusing to store a password. ' +
+  'Store the profile without a password or run on a platform with safeStorage support.';
+
+/** What a worker is forked with. The password is in `url`, so callers must
+ *  keep this out of argv and logs. */
+export type ProfileConnection = { url: string; schemas: string[]; timeoutMs?: number };
+
+declare const sealed: unique symbol;
+
+/** A validated profile input whose password, if it had one, is already
+ *  encrypted. Only seal() makes one — the brand cannot be written without a
+ *  cast — so upsertSealed() is never handed a plaintext password. */
+export type SealedProfileInput = {
+  readonly [sealed]: true;
+  readonly input: ProfileInput;
+  /** The URL with its password taken out. */
+  readonly sansPassword: string;
+  readonly encryptedPassword?: string;
 };
 
 type StoredProfile = {
@@ -247,19 +274,38 @@ export class ProfileStore {
     }));
   }
 
-  upsert(rawInput: unknown): ProfileView[] {
+  /** Validate, encrypt and write. Use seal() + upsertSealed() instead when
+   *  other state has to change between the encryption and the write. */
+  async upsert(rawInput: unknown): Promise<ProfileView[]> {
+    return this.upsertSealed(await this.seal(rawInput));
+  }
+
+  /** The asynchronous half of an upsert: validate the input and encrypt its
+   *  password, if it has one. Kept apart from the write so a caller can finish
+   *  every await first — profiles:save in index.ts discards a data worker and
+   *  then writes, and an await between the two would let a row-data call fork
+   *  a fresh worker from the profile as it was before the save. */
+  async seal(rawInput: unknown): Promise<SealedProfileInput> {
     const input = validateProfileInput(rawInput);
     const { sansPassword, password } = splitDbUrl(input.url);
     let encryptedPassword: string | undefined;
     if (password !== null) {
-      if (!this.encryptor.available()) {
-        throw new Error(
-          'OS keychain-backed encryption is unavailable; refusing to store a password. ' +
-            'Store the profile without a password or run on a platform with safeStorage support.',
-        );
-      }
-      encryptedPassword = this.encryptor.encrypt(password);
+      if (!(await this.encryptor.available())) throw new Error(KEYCHAIN_UNAVAILABLE_MESSAGE);
+      encryptedPassword = await this.encryptor.encrypt(password);
     }
+    return {
+      // The input's own URL still carries the password; only the stripped one
+      // travels on.
+      input: { ...input, url: sansPassword },
+      sansPassword,
+      ...(encryptedPassword !== undefined ? { encryptedPassword } : {}),
+    } as SealedProfileInput;
+  }
+
+  /** The synchronous half of an upsert: read, merge and write, with nothing
+   *  awaited in between. */
+  upsertSealed(sealedInput: SealedProfileInput): ProfileView[] {
+    const { input, sansPassword, encryptedPassword } = sealedInput;
     const data = this.read();
     const i = data.profiles.findIndex((p) => p.name === input.name);
     const existing = i >= 0 ? data.profiles[i] : undefined;
@@ -420,11 +466,11 @@ export class ProfileStore {
   }
 
   /** Rebuild the full connection URL (with password) for spawning a worker.
-   *  Callers must keep it out of argv and logs. */
-  connectionUrl(name: string): { url: string; schemas: string[]; timeoutMs?: number } {
-    const data = this.read();
-    const p = this.findProfile(data, name);
-    const password = p.encryptedPassword !== undefined ? this.encryptor.decrypt(p.encryptedPassword) : null;
+   *  Callers must keep it out of argv and logs. The profile is read before the
+   *  decrypt is awaited, so every field comes from the same version of it. */
+  async connectionUrl(name: string): Promise<ProfileConnection> {
+    const p = this.findProfile(this.read(), name);
+    const password = p.encryptedPassword !== undefined ? await this.encryptor.decrypt(p.encryptedPassword) : null;
     return { url: joinDbUrl(p.url, password), schemas: p.schemas, timeoutMs: p.timeoutMs };
   }
 

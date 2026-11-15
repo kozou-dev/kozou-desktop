@@ -25,9 +25,9 @@ import { ProfileStore, type Encryptor } from '../src/main/profileStore.js';
 import { DATA_LOG_PREFIX, type DataResult, type DataWorkerInbound } from '../src/shared/types.js';
 
 const fakeEncryptor: Encryptor = {
-  available: () => true,
-  encrypt: (s) => `enc:${Buffer.from(s).toString('base64')}`,
-  decrypt: (b) => Buffer.from(b.slice(4), 'base64').toString(),
+  available: async () => true,
+  encrypt: async (s) => `enc:${Buffer.from(s).toString('base64')}`,
+  decrypt: async (b) => Buffer.from(b.slice(4), 'base64').toString(),
 };
 
 class FakeChild implements DataWorkerHandle {
@@ -74,9 +74,40 @@ class FakeChild implements DataWorkerHandle {
   }
 }
 
-function harness(): { store: ProfileStore; manager: DataWorkerManager; children: FakeChild[] } {
+/** An encryptor whose decrypts wait for release() or fail(): the window in
+ *  which a fork is waiting on the keychain. */
+function gatedEncryptor(): {
+  encryptor: Encryptor;
+  waiting: () => number;
+  release: () => void;
+  fail: (message: string) => void;
+} {
+  const gates: { open: () => void; refuse: (err: Error) => void }[] = [];
+  return {
+    encryptor: {
+      ...fakeEncryptor,
+      decrypt: (blob) =>
+        new Promise((resolve, reject) => {
+          gates.push({ open: () => resolve(Buffer.from(blob.slice(4), 'base64').toString()), refuse: reject });
+        }),
+    },
+    waiting: () => gates.length,
+    release: () => {
+      for (const gate of gates.splice(0)) gate.open();
+    },
+    fail: (message) => {
+      for (const gate of gates.splice(0)) gate.refuse(new Error(message));
+    },
+  };
+}
+
+function harness(encryptor: Encryptor = fakeEncryptor): {
+  store: ProfileStore;
+  manager: DataWorkerManager;
+  children: FakeChild[];
+} {
   const dir = mkdtempSync(join(tmpdir(), 'kozou-desktop-data-test-'));
-  const store = new ProfileStore(dir, fakeEncryptor);
+  const store = new ProfileStore(dir, encryptor);
   const children: FakeChild[] = [];
   const fork: DataWorkerFork = (modulePath, options) => {
     const child = new FakeChild(modulePath, options);
@@ -97,7 +128,7 @@ async function settle(): Promise<void> {
 describe('DataWorkerManager', () => {
   it('refuses a profile that is not opted in, without forking', async () => {
     const { store, manager, children } = harness();
-    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
     const result = await manager.run('a', LIST);
     expect(result).toEqual({
       ok: false,
@@ -110,7 +141,7 @@ describe('DataWorkerManager', () => {
 
   it('forks with the secret and the capability in env only, and opens with schemas', async () => {
     const { store, manager, children } = harness();
-    store.upsert({ name: 'a', url: 'postgresql://app:s3cr3t@h:5432/db', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://app:s3cr3t@h:5432/db', schemas: ['public'] });
     store.setRowAccess('a', 'read');
 
     const pending = manager.run('a', LIST);
@@ -130,7 +161,7 @@ describe('DataWorkerManager', () => {
 
   it('reuses the worker for a second operation at the same capability', async () => {
     const { store, manager, children } = harness();
-    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
     store.setRowAccess('a', 'readwrite');
 
     const first = manager.run('a', LIST);
@@ -149,7 +180,7 @@ describe('DataWorkerManager', () => {
 
   it('discards the worker when the grant changes, and forks the new capability', async () => {
     const { store, manager, children } = harness();
-    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
     store.setRowAccess('a', 'read');
 
     const first = manager.run('a', LIST);
@@ -173,7 +204,7 @@ describe('DataWorkerManager', () => {
 
   it('settles an in-flight request when the worker is discarded by an edit', async () => {
     const { store, manager, children } = harness();
-    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
     store.setRowAccess('a', 'read');
 
     const pending = manager.run('a', LIST);
@@ -191,7 +222,7 @@ describe('DataWorkerManager', () => {
 
   it('settles in-flight requests on a crash, and logs neither unprefixed output nor it in the reply', async () => {
     const { store, manager, children } = harness();
-    store.upsert({ name: 'a', url: 'postgresql://app:s3cr3t@h:5432/db', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://app:s3cr3t@h:5432/db', schemas: ['public'] });
     store.setRowAccess('a', 'read');
 
     const logged: string[] = [];
@@ -239,7 +270,7 @@ describe('DataWorkerManager', () => {
 
   it('scrubs the connection secret out of a worker line before it is logged', async () => {
     const { store, manager, children } = harness();
-    store.upsert({ name: 'a', url: 'postgresql://app:s3cr3t@h:5432/db', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://app:s3cr3t@h:5432/db', schemas: ['public'] });
     store.setRowAccess('a', 'read');
 
     const logged: string[] = [];
@@ -268,7 +299,7 @@ describe('DataWorkerManager', () => {
 
   it("reports the worker's own startup failure, already sanitized", async () => {
     const { store, manager, children } = harness();
-    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
     store.setRowAccess('a', 'read');
 
     const pending = manager.run('a', LIST);
@@ -284,7 +315,7 @@ describe('DataWorkerManager', () => {
 
   it('recovers from a startup failure: the failed worker is dropped, the next call re-forks', async () => {
     const { store, manager, children } = harness();
-    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
     store.setRowAccess('a', 'read');
 
     // A transient failure (the database was down, the password prompt was
@@ -313,7 +344,7 @@ describe('DataWorkerManager', () => {
     vi.useFakeTimers();
     try {
       const { store, manager, children } = harness();
-      store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'], timeoutMs: 1_000 });
+      await store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'], timeoutMs: 1_000 });
       store.setRowAccess('a', 'readwrite');
 
       const pending = manager.run('a', INSERT);
@@ -335,7 +366,7 @@ describe('DataWorkerManager', () => {
   it('kills every worker on quit', async () => {
     const { store, manager, children } = harness();
     for (const name of ['a', 'b']) {
-      store.upsert({ name, url: `postgresql://u@h:5432/${name}`, schemas: ['public'] });
+      await store.upsert({ name, url: `postgresql://u@h:5432/${name}`, schemas: ['public'] });
       store.setRowAccess(name, 'read');
       const pending = manager.run(name, LIST);
       await settle();
@@ -351,7 +382,7 @@ describe('DataWorkerManager', () => {
 
   it('refuses a removed profile after its worker is dropped', async () => {
     const { store, manager, children } = harness();
-    store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
+    await store.upsert({ name: 'a', url: 'postgresql://u@h:5432/db', schemas: ['public'] });
     store.setRowAccess('a', 'read');
     const pending = manager.run('a', LIST);
     await settle();
@@ -374,5 +405,120 @@ describe('DataWorkerManager', () => {
     expect(openBudgetMs(1_000)).toBe(1_000 * 16 + 15_000);
     expect(operationBudgetMs(undefined)).toBe(10_000 * 4 + 5_000);
     expect(operationBudgetMs(2_000)).toBe(2_000 * 4 + 5_000);
+  });
+});
+
+// The password is decrypted asynchronously before the fork. These pin what
+// may happen in that window: one fork however many operations wait on it, and
+// none at all once something has made the fork stale.
+describe('DataWorkerManager while the password is being decrypted', () => {
+  const URL = 'postgresql://app:s3cr3t@h:5432/db';
+  const ROWS = { ok: true, status: 200, body: { rows: [] } } as const;
+
+  it('forks once for operations that arrive during the decrypt', async () => {
+    const gate = gatedEncryptor();
+    const { store, manager, children } = harness(gate.encryptor);
+    await store.upsert({ name: 'a', url: URL, schemas: ['public'] });
+    store.setRowAccess('a', 'read');
+
+    const first = manager.run('a', LIST);
+    const second = manager.run('a', LIST);
+    await settle();
+    expect(children).toHaveLength(0);
+    expect(gate.waiting()).toBe(1);
+
+    gate.release();
+    await settle();
+    expect(children).toHaveLength(1);
+    children[0]!.opened();
+    await settle();
+    children[0]!.reply(0, ROWS);
+    children[0]!.reply(1, ROWS);
+    await expect(first).resolves.toEqual(ROWS);
+    await expect(second).resolves.toEqual(ROWS);
+  });
+
+  it('does not fork for a grant revoked during the decrypt', async () => {
+    const gate = gatedEncryptor();
+    const { store, manager, children } = harness(gate.encryptor);
+    await store.upsert({ name: 'a', url: URL, schemas: ['public'] });
+    store.setRowAccess('a', 'readwrite');
+
+    const pending = manager.run('a', INSERT);
+    await settle();
+    // What the data:setRowAccess handler does: store, then discard.
+    store.setRowAccess('a', 'off');
+    manager.onRowAccessChanged('a');
+    gate.release();
+
+    const result = await pending;
+    expect(result).toMatchObject({ ok: false, code: 'unavailable' });
+    expect(children).toHaveLength(0);
+  });
+
+  it('does not fork from a profile edited during the decrypt, and forks the new one next', async () => {
+    const gate = gatedEncryptor();
+    const { store, manager, children } = harness(gate.encryptor);
+    await store.upsert({ name: 'a', url: URL, schemas: ['public'], timeoutMs: 1_000 });
+    store.setRowAccess('a', 'read');
+
+    const pending = manager.run('a', LIST);
+    await settle();
+    // What profiles:save does for a timeout edit: discard, then write. The
+    // grant survives (same connection), so only the discard stops a worker
+    // with the old budget.
+    manager.onProfileUpserted('a');
+    await store.upsert({ name: 'a', url: URL, schemas: ['public'], timeoutMs: 2_000 });
+    gate.release();
+    expect(await pending).toMatchObject({ ok: false, code: 'unavailable' });
+    expect(children).toHaveLength(0);
+
+    const next = manager.run('a', LIST);
+    await settle();
+    gate.release();
+    await settle();
+    expect(children).toHaveLength(1);
+    expect(children[0]!.messages[0]).toEqual({ type: 'open', schemas: ['public'], timeoutMs: 2_000 });
+    children[0]!.opened();
+    await settle();
+    children[0]!.reply(0, ROWS);
+    await expect(next).resolves.toEqual(ROWS);
+  });
+
+  it('reports a keychain refusal and tries again on the next operation', async () => {
+    const gate = gatedEncryptor();
+    const { store, manager, children } = harness(gate.encryptor);
+    await store.upsert({ name: 'a', url: URL, schemas: ['public'] });
+    store.setRowAccess('a', 'read');
+
+    const refused = manager.run('a', LIST);
+    await settle();
+    gate.fail('keychain refused');
+    expect(await refused).toEqual({ ok: false, status: 503, code: 'unavailable', message: 'keychain refused' });
+    expect(children).toHaveLength(0);
+
+    const retry = manager.run('a', LIST);
+    await settle();
+    gate.release();
+    await settle();
+    expect(children).toHaveLength(1);
+    children[0]!.opened();
+    await settle();
+    children[0]!.reply(0, ROWS);
+    await expect(retry).resolves.toEqual(ROWS);
+  });
+
+  it('forks nothing when the app quits during the decrypt', async () => {
+    const gate = gatedEncryptor();
+    const { store, manager, children } = harness(gate.encryptor);
+    await store.upsert({ name: 'a', url: URL, schemas: ['public'] });
+    store.setRowAccess('a', 'read');
+
+    const pending = manager.run('a', LIST);
+    await settle();
+    manager.killAllSync();
+    gate.release();
+    expect(await pending).toMatchObject({ ok: false, code: 'unavailable' });
+    expect(children).toHaveLength(0);
   });
 });
