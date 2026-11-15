@@ -24,8 +24,10 @@ import { electronDataWorkerFork, electronMcpWorkerFork } from './electronFork.js
 import { runInspectWorker } from './inspectRunner.js';
 import { FileMcpLocatorWriter } from './mcpLocatorFile.js';
 import { McpServerManager } from './mcpServerManager.js';
-import { ProfileStore, validateProfileInput, type Encryptor } from './profileStore.js';
+import { ProfileStore, validateProfileInput } from './profileStore.js';
 import { assertRowAccess, requestRowAccessChange, type RowAccessApproval } from './rowAccessGate.js';
+import { createSafeStorageEncryptor } from './safeStorageEncryptor.js';
+import { createSerialQueue } from './serialQueue.js';
 import { suggestedFileName, validateSqlExport } from './sqlExport.js';
 
 // Pin the machine-facing identity to a stable slug. userData, the keychain
@@ -62,24 +64,6 @@ app.on('second-instance', () => {
     win.focus();
   }
 });
-
-/** True when safeStorage really is backed by an OS keychain. On Linux,
- *  `isEncryptionAvailable()` also returns true for the `basic_text` backend
- *  (a hardcoded key — obfuscation, not encryption, and selectable by anyone
- *  via `--password-store=basic`), so that backend is rejected explicitly. */
-function keychainBackedEncryptionAvailable(): boolean {
-  if (!safeStorage.isEncryptionAvailable()) return false;
-  if (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text') {
-    return false;
-  }
-  return true;
-}
-
-const safeStorageEncryptor: Encryptor = {
-  available: keychainBackedEncryptionAvailable,
-  encrypt: (plaintext) => safeStorage.encryptString(plaintext).toString('base64'),
-  decrypt: (blob) => safeStorage.decryptString(Buffer.from(blob, 'base64')),
-};
 
 /** The trust anchor for a row-access escalation: a native dialog drawn by
  *  main, modal to the window. Never a renderer modal — a compromised renderer
@@ -162,7 +146,10 @@ void app.whenReady().then(() => {
   if (!hasSingleInstanceLock) return;
   session.defaultSession.setSpellCheckerEnabled(false);
 
-  store = new ProfileStore(join(app.getPath('userData'), 'store'), safeStorageEncryptor);
+  store = new ProfileStore(
+    join(app.getPath('userData'), 'store'),
+    createSafeStorageEncryptor(safeStorage, process.platform),
+  );
   // Nothing is serving yet, so any locator on disk is a leftover from a crash
   // or a kill -9. Sweep before the restore below publishes the real ones.
   const locators = new FileMcpLocatorWriter(join(app.getPath('userData'), LOCATOR_DIR_NAME));
@@ -181,8 +168,21 @@ void app.whenReady().then(() => {
   );
 
   ipcMain.handle(IPC.profilesList, () => store.list());
-  ipcMain.handle(IPC.profilesSave, async (_e, input: unknown) => {
+  // Saves and deletes run one at a time, in the order they arrive. A save
+  // waits on the keychain before it writes — on first use, behind a macOS
+  // Keychain prompt — and other IPC keeps running meanwhile: unqueued, a
+  // delete or a later save of the same profile could finish inside that wait
+  // and then be overwritten, bringing a deleted profile back. (The synchronous
+  // API ruled this out by blocking main for the whole prompt.)
+  const profileWrites = createSerialQueue();
+  ipcMain.handle(IPC.profilesSave, (_e, input: unknown) => profileWrites(async () => {
     const validated = validateProfileInput(input);
+    // Encrypt before anything is stopped or discarded. A keychain refusal then
+    // fails the save without having taken a running server down, and the
+    // discard and the write at the end follow each other with no await in
+    // between: a row-data call landing in such a gap would fork a fresh
+    // worker from the profile as it was before this save.
+    const sealed = await store.seal(validated);
     // Only a connection-relevant edit (URL incl. password, or schemas)
     // invalidates a running server's fork-time connection — stop it before
     // the store changes rather than serve the old database. Label/color
@@ -197,7 +197,7 @@ void app.whenReady().then(() => {
     if (existing !== undefined) {
       timeoutChanged = existing.timeoutMs !== validated.timeoutMs;
       try {
-        const current = store.connectionUrl(validated.name);
+        const current = await store.connectionUrl(validated.name);
         connectionChanged =
           current.url !== validated.url ||
           JSON.stringify(current.schemas) !== JSON.stringify(validated.schemas);
@@ -207,17 +207,17 @@ void app.whenReady().then(() => {
     }
     if (connectionChanged) await mcpManager.onProfileUpserted(validated.name);
     if (connectionChanged || timeoutChanged) dataManager.onProfileUpserted(validated.name);
-    return store.upsert(validated);
-  });
-  ipcMain.handle(IPC.profilesDelete, async (_e, name: unknown) => {
+    return store.upsertSealed(sealed);
+  }));
+  ipcMain.handle(IPC.profilesDelete, (_e, name: unknown) => profileWrites(async () => {
     if (typeof name !== 'string') throw new Error('profile name must be a string');
     await mcpManager.onProfileRemoved(name);
     dataManager.onProfileRemoved(name);
     return store.remove(name);
-  });
+  }));
   ipcMain.handle(IPC.inspectRun, async (_e, name: unknown) => {
     if (typeof name !== 'string') throw new Error('profile name must be a string');
-    const connection = store.connectionUrl(name);
+    const connection = await store.connectionUrl(name);
     const workerPath = join(import.meta.dirname, 'inspectWorker.js');
     return runInspectWorker(workerPath, connection);
   });

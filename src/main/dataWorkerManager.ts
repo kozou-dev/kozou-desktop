@@ -80,11 +80,12 @@ export type DataWorkerFork = (
 ) => DataWorkerHandle;
 
 type Entry = {
-  child: DataWorkerHandle;
+  /** Absent until the password is decrypted and the child forked. */
+  child?: DataWorkerHandle;
   /** What the child was forked as. Compared against the store on every call. */
   capability: DataCapability;
   /** Resolves when the child reported a successful open; rejects with an
-   *  already-sanitized reason when it did not. */
+   *  already-sanitized reason when it did not, or when it was never forked. */
   opened: Promise<void>;
   pending: Map<number, (result: DataResult) => void>;
   /** Value-free lines the worker wrote about itself (see DATA_LOG_PREFIX). */
@@ -131,21 +132,18 @@ export class DataWorkerManager {
       };
     }
 
-    let entry: Entry;
-    try {
-      entry = this.ensure(name, capability);
-    } catch (err) {
-      // Fork-time failures: an unknown profile, or a keychain refusal while
-      // rebuilding the connection URL.
-      return unavailable(err instanceof Error ? err.message : String(err));
-    }
+    const entry = this.ensure(name, capability);
 
     try {
+      // Fork-time failures (an unknown profile, a keychain refusal while
+      // rebuilding the connection URL) land here too.
       await entry.opened;
     } catch (err) {
       return unavailable(err instanceof Error ? err.message : String(err));
     }
-    if (entry.discarded) return unavailable('The row data worker was stopped.');
+    // `opened` resolves only after the fork, so a live entry has its child.
+    const child = entry.child;
+    if (entry.discarded || child === undefined) return unavailable('The row data worker was stopped.');
 
     const id = (this.nextRequestId += 1);
     const budget = operationBudgetMs(this.timeoutMs(name));
@@ -170,7 +168,7 @@ export class DataWorkerManager {
         resolve(result);
       });
       const request: DataWorkerInbound = { type: 'run', id, op };
-      entry.child.postMessage(request);
+      child.postMessage(request);
     });
   }
 
@@ -213,16 +211,11 @@ export class DataWorkerManager {
       this.discard(name, 'The row access level changed.');
     }
 
-    // The URL is rebuilt (and the password decrypted) only here, at fork time.
-    const connection = this.store.connectionUrl(name);
-    const child = this.fork(this.workerPath(), {
-      env: { [ENV_URL]: connection.url, [ENV_ROW_ACCESS]: capability },
-      serviceName: 'kozou-desktop-data',
-      stdio: 'pipe',
-    });
-
+    // Registered before the password is decrypted, which is asynchronous: an
+    // operation arriving in the meantime finds this entry and shares its fork
+    // instead of starting a second worker, and a discard in the meantime has
+    // an entry to mark (open() checks the mark before it forks).
     const entry: Entry = {
-      child,
       capability,
       opened: Promise.resolve(),
       pending: new Map(),
@@ -230,8 +223,46 @@ export class DataWorkerManager {
       droppedLines: 0,
       discarded: false,
     };
+    this.entries.set(name, entry);
+    entry.opened = this.open(name, entry);
+    // A worker that failed to open must not become a permanent tombstone: it
+    // deliberately stays resident on failure (the parent owns termination), so
+    // leaving the entry in the registry would make every later operation await
+    // the same rejection even after the database recovers — and would leak its
+    // pool. Drop it and kill the child; the next operation forks a fresh one.
+    // This also handles the open-timeout case, where the worker may still be
+    // introspecting: killing it is what stops a late success from stranding a
+    // live pool behind a rejected entry.
+    //
+    // The handler doubles as the unhandled-rejection guard: `opened` must have
+    // a consumer before the first caller awaits it.
+    entry.opened.catch(() => {
+      if (this.entries.get(name) === entry) this.entries.delete(name);
+      entry.discarded = true;
+      this.settleAll(entry, 'The row data worker could not start.');
+      entry.child?.kill();
+    });
+    return entry;
+  }
+
+  /** Decrypt the password, fork, and wait for the worker to report that it
+   *  opened. */
+  private async open(name: string, entry: Entry): Promise<void> {
+    // The URL is rebuilt (and the password decrypted) only here, at fork time.
+    const connection = await this.store.connectionUrl(name);
+    // A discard during the decrypt has already dropped this entry. Forking now
+    // would start a worker for a connection or a grant that is no longer
+    // current, with nothing left in the registry to stop it.
+    if (entry.discarded) throw new Error('The row data worker was stopped.');
+    const child = this.fork(this.workerPath(), {
+      env: { [ENV_URL]: connection.url, [ENV_ROW_ACCESS]: entry.capability },
+      serviceName: 'kozou-desktop-data',
+      stdio: 'pipe',
+    });
+    entry.child = child;
+
     const openBudget = openBudgetMs(connection.timeoutMs);
-    entry.opened = new Promise<void>((resolve, reject) => {
+    const opened = new Promise<void>((resolve, reject) => {
       let settled = false;
       const finish = (error?: string): void => {
         if (settled) return;
@@ -276,23 +307,6 @@ export class DataWorkerManager {
         }
       });
     });
-    // A worker that failed to open must not become a permanent tombstone: it
-    // deliberately stays resident on failure (the parent owns termination), so
-    // leaving the entry in the registry would make every later operation await
-    // the same rejection even after the database recovers — and would leak its
-    // pool. Drop it and kill the child; the next operation forks a fresh one.
-    // This also handles the open-timeout case, where the worker may still be
-    // introspecting: killing it is what stops a late success from stranding a
-    // live pool behind a rejected entry.
-    //
-    // The handler doubles as the unhandled-rejection guard: `opened` must have
-    // a consumer before the first caller awaits it.
-    entry.opened.catch(() => {
-      if (this.entries.get(name) === entry) this.entries.delete(name);
-      entry.discarded = true;
-      this.settleAll(entry, 'The row data worker could not start.');
-      entry.child.kill();
-    });
 
     // Buffer each stream to line boundaries before filtering: a secret (or a
     // line) straddling a chunk boundary must not evade the scrub. Only the
@@ -321,14 +335,13 @@ export class DataWorkerManager {
     child.stderr?.on('data', makeTail());
     child.stdout?.on('data', makeTail());
 
-    this.entries.set(name, entry);
     const open: DataWorkerInbound = {
       type: 'open',
       schemas: connection.schemas,
       ...(connection.timeoutMs !== undefined ? { timeoutMs: connection.timeoutMs } : {}),
     };
     child.postMessage(open);
-    return entry;
+    return opened;
   }
 
   private discard(name: string, reason: string): void {
@@ -337,7 +350,9 @@ export class DataWorkerManager {
     this.entries.delete(name);
     entry.discarded = true;
     this.settleAll(entry, reason);
-    entry.child.kill();
+    // No child yet means open() is still decrypting; it sees `discarded` and
+    // does not fork.
+    entry.child?.kill();
   }
 
   private settleAll(entry: Entry, reason: string): void {
